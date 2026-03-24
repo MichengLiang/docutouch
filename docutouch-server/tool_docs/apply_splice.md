@@ -1,12 +1,13 @@
 ## `apply_splice`
 
-Structural transfer tool for relocating, duplicating, or deleting already-existing text spans.
+Primary structural transfer tool for relocating, duplicating, or deleting already-existing text spans.
 
 ### Tool Identity
 
 * Splice-program input only.
-* The tool operates on existing text spans selected by numbered excerpts.
-* The tool is not free-form authored text editing.
+* The tool operates on already-existing text spans selected by numbered excerpts.
+* The tool expresses source-to-target transfer relations or source-only deletion.
+* The tool does not author new inline text inside the splice program.
 * The tool is distinct from `apply_patch`.
 
 ### Accepted Input Shape
@@ -14,47 +15,162 @@ Structural transfer tool for relocating, duplicating, or deleting already-existi
 * The accepted input is one literal splice text string.
 * The outer envelope starts with `*** Begin Splice`.
 * The outer envelope ends with `*** End Splice`.
-* Each action uses one source clause and either one target clause or `Delete Span`.
+* The body contains one or more splice actions.
+* Each action is either:
+  * one source clause plus one target clause, or
+  * one `Delete Span` source clause with no target clause.
 
-### Current Supported Surface
+### Minimal Grammar
 
 ```text
-*** Begin Splice
-*** Copy From File: source.txt
-@@
-1 | alpha
-*** Append To File: dest.txt
-*** End Splice
+Splice := Begin { Action } End
+Begin := "*** Begin Splice" NEWLINE
+End := "*** End Splice" NEWLINE
+
+Action := DeleteAction | TransferAction
+
+DeleteAction := DeleteSource Selection
+TransferAction := TransferSource Selection Target
+
+DeleteSource := "*** Delete Span From File: " path NEWLINE
+TransferSource := ("*** Copy From File: " | "*** Move From File: ") path NEWLINE
+
+Target := AppendTarget | InsertBeforeTarget | InsertAfterTarget | ReplaceTarget
+AppendTarget := "*** Append To File: " path NEWLINE
+InsertBeforeTarget := "*** Insert Before In File: " path NEWLINE Selection
+InsertAfterTarget := "*** Insert After In File: " path NEWLINE Selection
+ReplaceTarget := "*** Replace In File: " path NEWLINE Selection
+
+Selection := "@@" NEWLINE { SelectionItem NEWLINE }
+SelectionItem := NumberedLine | SourceOmission | TargetOmission
+NumberedLine := line_number " | " visible_content
+SourceOmission := "... source lines omitted ..."
+TargetOmission := "... target lines omitted ..."
 ```
+
+### Authoring Invariants
+
+* Every splice program must contain at least one action.
+* Every transfer action requires exactly one source clause, one source selection, and one target clause.
+* `Delete Span` actions do not admit a target clause.
+* Every selection must begin with `@@`.
+* Every selection must contain at least one numbered line.
+* Numbered lines must use the exact `N | content` delimiter.
+* Numbered line numbers must be positive integers, must not use leading zeroes, and must be strictly increasing.
+* Non-contiguous numbered lines require an omission token.
+* Omission tokens are side-specific and must be surrounded by numbered lines.
+* Consecutive omission tokens are invalid.
+* Selection lines must reproduce full visible line content, not sampled inspection fragments.
+
+### Action Basis
 
 The current runtime supports the locked action basis:
 
 * `Delete Span From File`
 * `Copy From File` + `Append To File`
 * `Move From File` + `Append To File`
-* `Copy/Move From File` + `Insert Before In File`
-* `Copy/Move From File` + `Insert After In File`
-* `Copy/Move From File` + `Replace In File`
+* `Copy From File` + `Insert Before In File`
+* `Copy From File` + `Insert After In File`
+* `Move From File` + `Insert Before In File`
+* `Move From File` + `Insert After In File`
+* `Copy From File` + `Replace In File`
+* `Move From File` + `Replace In File`
+
+### Canonical Authored Shapes
+
+Append shape:
+
+```text
+*** Begin Splice
+*** Copy From File: source.py
+@@
+12 | def build_context():
+13 |     return "strict"
+*** Append To File: target.py
+*** End Splice
+```
+
+Replace shape with source-side and target-side omission:
+
+```text
+*** Begin Splice
+*** Move From File: source.py
+@@
+120 | def build_context(...)
+... source lines omitted ...
+128 |     return "strict"
+*** Replace In File: target.py
+@@
+45 | old block start
+... target lines omitted ...
+52 | old block end
+*** End Splice
+```
+
+Delete shape:
+
+```text
+*** Begin Splice
+*** Delete Span From File: source.py
+@@
+40 | def obsolete_helper(...)
+... source lines omitted ...
+47 |     return old_value
+*** End Splice
+```
 
 ### Selection Contract
 
-* Selections are line-oriented.
+* Selections are line-oriented numbered excerpts.
 * Selections carry absolute 1-indexed line numbers.
-* Omission tokens must be side-specific.
-* Validation uses line numbers plus visible content.
+* Validation uses double-lock matching: line numbers plus visible line content.
+* Omission tokens are authoritative, side-specific range compression markers.
+* Omission tokens denote contiguous omitted lines, not sparse sampling.
+* Source selections use `... source lines omitted ...`.
+* Target selections use `... target lines omitted ...`.
+
+### Same-File And Destination Rules
+
+* Same-file source and target selections are resolved against one original snapshot.
+* Same-file anchored target actions are allowed when the source and target ranges remain non-overlapping against that original snapshot.
+* Same-file overlap is illegal only when the selected source range overlaps the anchored target range in that original snapshot.
+* `Append To File` may create a missing destination file.
+* `Insert Before In File`, `Insert After In File`, and `Replace In File` require the target file and target selection to already exist.
+* Transferred source bytes are preserved verbatim, including newline bytes and EOF-without-newline state.
+
+### Execution Semantics
+
+* `Copy + Append` appends the selected source bytes to the destination and leaves the source unchanged.
+* `Move + Append` appends the selected source bytes to the destination and removes the selected source bytes.
+* `Copy/Move + Insert Before/After` uses the validated target selection as the insertion anchor.
+* `Copy/Move + Replace` replaces the validated target range with the selected source bytes.
+* `Delete Span` removes the validated source range and performs no target write.
+* Each splice action is a connected mutation unit.
+* Disjoint connected units may partially succeed.
+* A connected mutation unit must not leave a move half-applied.
+
+### Success Summary Semantics
+
+* Success returns a compact `A/M/D` affected-path summary.
+* These tags summarize affected paths, not source/target verbs.
+* `A` reports an add-shaped path outcome.
+* `M` reports a modify-shaped path outcome.
+* `D` reports a delete-shaped path outcome.
 
 ### Path Rules
 
 * Relative paths resolve against the active workspace or CLI current directory.
 * Absolute paths remain legal without a workspace, using an execution-only anchor derived from the referenced paths.
-* `Append To File` may create a missing destination file.
-* Anchored target actions require the target file and target selection to already exist.
+* Path strings are interpreted as filesystem paths, not shell expressions.
 
-### Current Output Shape
+### Failure Surface
 
-* Success returns a compact `A/M/D` summary of affected files.
 * Failures return compact `error[CODE]: ...` diagnostics with splice-specific codes.
-* Partial success preserves committed `A/M/D` changes plus failed-unit repair accounting.
+* Source mismatch blames the source selection.
+* Target mismatch blames the target selection.
+* Same-file legality failures blame the action header.
+* Write-stage failures preserve repair-oriented accounting.
+* Partial success preserves committed `A/M/D` changes plus failed-unit accounting.
 
 ### Current Diagnostic Family
 
@@ -67,14 +183,3 @@ The current runtime supports the locked action basis:
 * `SPLICE_TARGET_STATE_INVALID`
 * `SPLICE_WRITE_ERROR`
 * `SPLICE_PARTIAL_UNIT_FAILURE`
-
-### Example
-
-```text
-*** Begin Splice
-*** Move From File: source.txt
-@@
-2 | beta
-*** Append To File: dest.txt
-*** End Splice
-```

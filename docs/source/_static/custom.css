@@ -1,0 +1,15 @@
+/* custom.css */
+
+/*
+ * 精准定位由 sphinxcontrib-mermaid 生成的 <pre> 标签，并将其居中。
+ * 这个选择器现在与实际生成的 HTML 结构完全匹配。
+ */
+pre.mermaid {
+    display: flex;
+    justify-content: center;
+    /* 
+     * 额外附赠：<pre> 标签默认可能会有自己的背景色或边框，
+     * 如果你的主题下它看起来不美观，可以取消下面这行注释来移除它们。
+     */
+    /* background-color: transparent; border: none; */
+}

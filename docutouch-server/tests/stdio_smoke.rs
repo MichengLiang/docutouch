@@ -1,0 +1,1718 @@
+#[macro_use]
+mod support;
+
+use rmcp::ServiceExt;
+use rmcp::model::CallToolRequestParams;
+use serde_json::json;
+use support::json_object;
+
+const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
+
+fn patch_files_in(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut patch_files = Vec::new();
+    if !dir.exists() {
+        return patch_files;
+    }
+    for entry in std::fs::read_dir(dir).expect("read_dir") {
+        let path = entry.expect("dir entry").path();
+        if path.is_dir() {
+            patch_files.extend(patch_files_in(&path));
+        } else if path.extension().is_some_and(|ext| ext == "patch") {
+            patch_files.push(path);
+        }
+    }
+    patch_files
+}
+
+fn assert_no_audit_patch_artifacts(workspace_root: &std::path::Path, message: &str) {
+    assert!(!message.contains("patch artifacts written to"));
+    assert!(!message.contains("failed-groups.json"));
+    assert!(!message.contains("failed-groups.txt"));
+    assert!(!message.contains("failure-summary.txt"));
+    assert!(!message.contains("committed-files.txt"));
+    assert!(
+        !workspace_root
+            .join(".docutouch")
+            .join("failed-groups.json")
+            .exists(),
+        "unexpected failed-groups.json artifact\n{message}"
+    );
+    assert!(
+        !workspace_root
+            .join(".docutouch")
+            .join("failed-groups.txt")
+            .exists(),
+        "unexpected failed-groups.txt artifact\n{message}"
+    );
+    assert!(
+        !workspace_root
+            .join(".docutouch")
+            .join("failure-summary.txt")
+            .exists(),
+        "unexpected failure-summary.txt artifact\n{message}"
+    );
+    assert!(
+        !workspace_root
+            .join(".docutouch")
+            .join("committed-files.txt")
+            .exists(),
+        "unexpected committed-files.txt artifact\n{message}"
+    );
+}
+
+fn assert_failed_patch_source_persisted(workspace_root: &std::path::Path, message: &str) {
+    let patch_files = patch_files_in(&workspace_root.join(".docutouch"));
+    assert!(
+        !patch_files.is_empty(),
+        "expected persisted patch source under .docutouch, got none\n{message}"
+    );
+    assert!(
+        message.contains(".docutouch"),
+        "expected diagnostics to mention persisted patch path\n{message}"
+    );
+    assert!(
+        !message.contains("--> <patch>:"),
+        "expected a real persisted patch path instead of <patch>\n{message}"
+    );
+}
+
+fn patch_text() -> String {
+    "*** Begin Patch\n*** Add File: docs/notes.md\n+hello\n*** End Patch\n".to_string()
+}
+
+fn splice_text() -> String {
+    "*** Begin Splice\n*** Copy From File: source.txt\n@@\n1 | alpha\n*** Append To File: dest.txt\n*** End Splice\n".to_string()
+}
+
+#[tokio::test]
+async fn server_lists_expected_tools() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let tools = client.list_all_tools().await?;
+        let tool_names = tools
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+
+        assert!(tool_names.contains(&"set_workspace".to_string()));
+        assert!(tool_names.contains(&"list_directory".to_string()));
+        assert!(tool_names.contains(&"read_file".to_string()));
+        assert!(tool_names.contains(&"search_text".to_string()));
+        assert!(!tool_names.contains(&"read_files".to_string()));
+        assert!(tool_names.contains(&"apply_patch".to_string()));
+        assert!(tool_names.contains(&"apply_splice".to_string()));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_round_trips_workspace_splice_and_read() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("source.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let splice_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_splice".into(),
+                arguments: Some(json_object(json!({ "splice": splice_text() }))),
+                task: None,
+            })
+            .await?;
+        let message = &splice_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("A dest.txt"));
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": "dest.txt" }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "alpha\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_groups_matches_by_file() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(
+        temp.path().join("src").join("one.txt"),
+        "alpha\nbeta\nalpha\n",
+    )?;
+    std::fs::write(temp.path().join("src").join("two.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[preview]:"));
+        assert!(text.contains("scope: src"));
+        assert!(text.contains("files: 2"));
+        assert!(text.contains("matched_lines: 3"));
+        assert!(text.contains("matches: 3"));
+        assert!(text.contains("rendered_files: 2"));
+        assert!(text.contains("rendered_lines: 3"));
+        assert!(text.contains("[1] src/one.txt (2 lines, 2 matches)"));
+        assert!(text.contains("  1 | alpha"));
+        assert!(text.contains("  3 | alpha"));
+        assert!(text.contains("[2] src/two.txt (1 line, 1 match)"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_preview_accounts_for_omission() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(
+        temp.path().join("src").join("noisy.txt"),
+        "alpha\nalpha\nalpha\nalpha\nalpha\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[preview]:"));
+        assert!(text.contains("files: 1"));
+        assert!(text.contains("matched_lines: 5"));
+        assert!(text.contains("matches: 5"));
+        assert!(text.contains("rendered_files: 1"));
+        assert!(text.contains("rendered_lines: 3"));
+        assert!(text.contains("[1] src/noisy.txt (5 lines, 5 matches)"));
+        assert!(text.contains("  note: 2 more matched lines in this file"));
+        assert!(text.contains("omitted:"));
+        assert!(text.contains("- 2 more matched lines not shown"));
+        assert!(!text.contains("  4 | alpha"));
+        assert!(!text.contains("  5 | alpha"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_full_returns_all_grouped_matches() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(
+        temp.path().join("src").join("full.txt"),
+        "alpha\nalpha\nalpha\nalpha\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src",
+                    "view": "full"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[full]:"));
+        assert!(text.contains("files: 1"));
+        assert!(text.contains("matched_lines: 4"));
+        assert!(text.contains("matches: 4"));
+        assert!(!text.contains("rendered_files:"));
+        assert!(!text.contains("omitted:"));
+        assert!(text.contains("  1 | alpha"));
+        assert!(text.contains("  2 | alpha"));
+        assert!(text.contains("  3 | alpha"));
+        assert!(text.contains("  4 | alpha"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_accepts_path_arrays() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::create_dir_all(temp.path().join("docs"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
+    std::fs::write(temp.path().join("docs").join("two.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": ["src", "docs/two.txt"],
+                    "view": "full"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[full]:"));
+        assert!(text.contains("scope: [src, docs/two.txt]"));
+        assert!(text.contains("files: 2"));
+        assert!(text.contains("[1] docs/two.txt (1 line, 1 match)"));
+        assert!(text.contains("[2] src/one.txt (1 line, 1 match)"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_rejects_render_shaping_line_number_flag() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src",
+                    "rg_args": "-n"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("line-number flags should be rejected");
+        assert!(err.to_string().contains("render-shaping flag `-n`"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_rejects_render_shaping_context_flag() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src",
+                    "rg_args": "-C 2"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("context flags should be rejected");
+        assert!(err.to_string().contains("render-shaping flag `-C`"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_ranks_by_matched_lines_then_hits_then_path() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha\nbeta\n")?;
+    std::fs::write(
+        temp.path().join("src").join("two.txt"),
+        "alpha beta\nbeta\n",
+    )?;
+    std::fs::write(temp.path().join("src").join("zzz.txt"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha|beta",
+                    "path": "src",
+                    "view": "full"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        let two = text
+            .find("[1] src/two.txt")
+            .expect("two.txt should rank first");
+        let one = text
+            .find("[2] src/one.txt")
+            .expect("one.txt should rank second");
+        let zzz = text
+            .find("[3] src/zzz.txt")
+            .expect("zzz.txt should rank third");
+        assert!(two < one && one < zzz);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_requires_workspace_for_relative_paths_without_default()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.txt"), "alpha\n")?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            cmd.env_remove(DEFAULT_WORKSPACE_ENV);
+        },
+        client,
+        {
+            let err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "search_text".into(),
+                    arguments: Some(json_object(json!({
+                        "query": "alpha",
+                        "path": "."
+                    }))),
+                    task: None,
+                })
+                .await
+                .expect_err("relative search should require workspace");
+
+            assert!(err.to_string().contains(
+                "Call set_workspace first, set DOCUTOUCH_DEFAULT_WORKSPACE, or use an absolute path"
+            ));
+
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_round_trips_workspace_patch_and_read() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                task: None,
+            })
+            .await?;
+        assert!(
+            patch_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("Success. Updated the following files:")
+        );
+        assert!(
+            patch_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("A docs")
+        );
+        assert!(
+            patch_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("notes.md")
+        );
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": "docs/notes.md" }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "hello\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_warns_when_add_replaces_existing_file() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.md"), "old\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": "*** Begin Patch\n*** Add File: notes.md\n+new\n*** End Patch\n"
+                }))),
+                task: None,
+            })
+            .await?;
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("warning[ADD_REPLACED_EXISTING_FILE]"));
+        assert!(message.contains("  --> notes.md"));
+        assert!(message.contains("prefer Update File when editing an existing file"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_warns_when_move_replaces_existing_destination() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("from.txt"), "from\n")?;
+    std::fs::write(temp.path().join("to.txt"), "dest\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-from\n+new\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await?;
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("warning[MOVE_REPLACED_EXISTING_DESTINATION]"));
+        assert!(message.contains("  --> to.txt"));
+        assert!(message.contains("prefer a fresh destination path when renaming"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_allows_empty_add_file_and_creates_empty_file() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let patch = "*** Begin Patch\n*** Add File: empty.txt\n*** End Patch\n";
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": patch }))),
+                task: None,
+            })
+            .await?;
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("A empty.txt"));
+        assert_eq!(
+            std::fs::read(temp.path().join("empty.txt"))?,
+            Vec::<u8>::new()
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_preserves_crlf_bytes_during_update() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let patch = "*** Begin Patch\n*** Update File: crlf.txt\n@@\n-b\n+x\n*** End Patch\n";
+    std::fs::write(temp.path().join("crlf.txt"), b"a\r\nb\r\nc\r\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": patch }))),
+                task: None,
+            })
+            .await?;
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert_eq!(
+            std::fs::read(temp.path().join("crlf.txt"))?,
+            b"a\r\nx\r\nc\r\n"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_preserves_missing_final_newline_during_update() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let patch = "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch\n";
+    std::fs::write(temp.path().join("no_newline.txt"), b"no newline at end")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": patch }))),
+                task: None,
+            })
+            .await?;
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert_eq!(
+            std::fs::read(temp.path().join("no_newline.txt"))?,
+            b"first line\nsecond line"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_can_show_one_indexed_line_numbers() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.md"), "alpha\nbeta\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.md",
+                    "line_range": [2, 2],
+                    "show_line_numbers": true
+                }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "2 | beta\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_aligns_line_numbers_to_widest_visible_line() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let content = (1..=12)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    std::fs::write(temp.path().join("notes.md"), content)?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.md",
+                    "line_range": [9, 12],
+                    "show_line_numbers": true
+                }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(
+            read_result.content[0].as_text().unwrap().text,
+            " 9 | line 9\n10 | line 10\n11 | line 11\n12 | line 12\n"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_supports_sampled_view() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("notes.txt"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.txt",
+                    "line_range": "1:7",
+                    "sample_step": 5,
+                    "sample_lines": 2,
+                    "max_chars": 80
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_eq!(text, "line 1\nline 2\n...\nline 6\nline 7\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_applies_defaults_for_partial_sampled_view_args() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("notes.txt"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.txt",
+                    "sample_step": 5
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_eq!(text, "line 1\nline 2\n...\nline 6\nline 7\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_requires_workspace_for_relative_paths_without_default() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let invalid_workspace = temp.path().join("missing-workspace");
+    std::fs::write(temp.path().join("notes.md"), "alpha\nbeta\n")?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            cmd.env(DEFAULT_WORKSPACE_ENV, &invalid_workspace);
+        },
+        client,
+        {
+            let read_err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "notes.md" }))),
+                    task: None,
+                })
+                .await
+                .expect_err("relative read_file should require workspace");
+            let read_err_text = read_err.to_string();
+            assert!(
+        read_err_text.contains(
+            "Relative path requires workspace. Call set_workspace first, set DOCUTOUCH_DEFAULT_WORKSPACE, or use an absolute path."
+        ),
+        "actual read_file error: {read_err_text}"
+    );
+
+            let list_err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "list_directory".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "." }))),
+                    task: None,
+                })
+                .await
+                .expect_err("relative list_directory should require workspace");
+            let list_err_text = list_err.to_string();
+            assert!(
+        list_err_text.contains(
+            "Relative path requires workspace. Call set_workspace first, set DOCUTOUCH_DEFAULT_WORKSPACE, or use an absolute path."
+        ),
+        "actual list_directory error: {list_err_text}"
+    );
+
+            let patch_err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "apply_patch".into(),
+                    arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                    task: None,
+                })
+                .await
+                .expect_err("relative apply_patch should require workspace");
+            let patch_err_text = patch_err.to_string();
+            assert!(
+        patch_err_text.contains(
+            "Relative path requires workspace. Call set_workspace first, set DOCUTOUCH_DEFAULT_WORKSPACE, or use an absolute path."
+        ),
+        "actual apply_patch error: {patch_err_text}"
+    );
+
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_uses_default_workspace_from_env_without_set_workspace() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().join("workspace");
+    let launch_dir = temp.path().join("launch");
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(&launch_dir)?;
+    std::fs::write(workspace.join("seed.txt"), "seed\n")?;
+    with_server_client!(
+        launch_dir.as_path(),
+        |cmd| {
+            cmd.env(DEFAULT_WORKSPACE_ENV, &workspace);
+        },
+        client,
+        {
+            let read_result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "seed.txt" }))),
+                    task: None,
+                })
+                .await?;
+            assert_eq!(read_result.content[0].as_text().unwrap().text, "seed\n");
+
+            let list_result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "list_directory".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "." }))),
+                    task: None,
+                })
+                .await?;
+            assert!(
+                list_result.content[0]
+                    .as_text()
+                    .unwrap()
+                    .text
+                    .contains("seed.txt")
+            );
+
+            let patch_result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "apply_patch".into(),
+                    arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                    task: None,
+                })
+                .await?;
+            assert!(
+                patch_result.content[0]
+                    .as_text()
+                    .unwrap()
+                    .text
+                    .contains("A docs")
+            );
+            assert_eq!(
+                std::fs::read_to_string(workspace.join("docs").join("notes.md"))?,
+                "hello\n"
+            );
+
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_set_workspace_overrides_default_workspace_env() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let default_workspace = temp.path().join("default-workspace");
+    let override_workspace = temp.path().join("override-workspace");
+    let launch_dir = temp.path().join("launch");
+    std::fs::create_dir_all(&default_workspace)?;
+    std::fs::create_dir_all(&override_workspace)?;
+    std::fs::create_dir_all(&launch_dir)?;
+    std::fs::write(default_workspace.join("notes.md"), "default\n")?;
+    std::fs::write(override_workspace.join("notes.md"), "override\n")?;
+    with_server_client!(
+        launch_dir.as_path(),
+        |cmd| {
+            cmd.env(DEFAULT_WORKSPACE_ENV, &default_workspace);
+        },
+        client,
+        {
+            client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "set_workspace".into(),
+                    arguments: Some(json_object(json!({ "path": &override_workspace }))),
+                    task: None,
+                })
+                .await?;
+
+            let read_result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "notes.md" }))),
+                    task: None,
+                })
+                .await?;
+            assert_eq!(read_result.content[0].as_text().unwrap().text, "override\n");
+
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_ignores_invalid_default_workspace_env() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let invalid_workspace = temp.path().join("missing-workspace");
+    std::fs::write(temp.path().join("notes.md"), "cwd\n")?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            cmd.env(DEFAULT_WORKSPACE_ENV, &invalid_workspace);
+        },
+        client,
+        {
+            let err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({ "relative_path": "notes.md" }))),
+                    task: None,
+                })
+                .await
+                .expect_err("invalid default workspace should behave like no workspace");
+            assert!(
+        err.to_string()
+            .contains("Relative path requires workspace. Call set_workspace first, set DOCUTOUCH_DEFAULT_WORKSPACE, or use an absolute path.")
+    );
+
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_apply_patch_accepts_absolute_paths_without_workspace() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let launch_dir = temp.path().join("launch");
+    std::fs::create_dir_all(&launch_dir)?;
+    let target = temp.path().join("absolute-notes.md");
+    with_server_client!(launch_dir.as_path(), client, {
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": format!(
+                        "*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch\n",
+                        target.display()
+                    )
+                }))),
+                task: None,
+            })
+            .await?;
+        assert!(
+            patch_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains(&target.display().to_string().replace('\\', "/"))
+        );
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": target }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "hello\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_apply_splice_accepts_absolute_paths_without_workspace() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let launch_dir = temp.path().join("launch");
+    std::fs::create_dir_all(&launch_dir)?;
+    let source = temp.path().join("absolute-source.txt");
+    let dest = temp.path().join("absolute-dest.txt");
+    std::fs::write(&source, "alpha\n")?;
+    with_server_client!(launch_dir.as_path(), client, {
+        let splice_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_splice".into(),
+                arguments: Some(json_object(json!({
+                    "splice": format!(
+                        "*** Begin Splice\n*** Copy From File: {}\n@@\n1 | alpha\n*** Append To File: {}\n*** End Splice\n",
+                        source.display(),
+                        dest.display()
+                    )
+                }))),
+                task: None,
+            })
+            .await?;
+        assert!(
+            splice_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains(&dest.display().to_string().replace('\\', "/"))
+        );
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": dest }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "alpha\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_list_directory_can_show_requested_timestamps() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.md"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": ".",
+                    "timestamp_fields": ["modified"]
+                }))),
+                task: None,
+            })
+            .await?;
+        assert!(
+            result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains("modified=")
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_outer_format_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(
+                    json!({ "patch": "*** Patch File: changes.patch\n" }),
+                )),
+                task: None,
+            })
+            .await
+            .expect_err("invalid patch should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("OUTER_INVALID_PATCH"));
+        assert!(message.contains("repair the patch shell"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_outer_hunk_failure_with_source_excerpt() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Add File: broken.txt\nbroken line\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("invalid hunk should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("OUTER_INVALID_ADD_LINE"));
+        assert!(message.contains("Add File block is malformed"));
+        assert!(message.contains("prefix each Add File content line with '+'"));
+        assert!(message.contains(":3:1"));
+        assert!(message.contains("3 | broken line"));
+        assert!(message.contains("| ^"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_empty_patch_as_structured_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": "" }))),
+                task: None,
+            })
+            .await
+            .expect_err("empty patch should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("OUTER_EMPTY_PATCH"));
+        assert!(message.contains("patch cannot be empty"));
+        assert!(message.contains("provide a complete patch envelope before retrying"));
+        assert!(!message.contains("  --> <patch>"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+        assert!(message.contains("\ncaused by:\n  patch cannot be empty"));
+        assert!(!message.contains("| ^"));
+        assert!(!message.contains("failed file groups:"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_patch_failure_with_persisted_patch_source() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("patch should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("MATCH_INVALID_CONTEXT"));
+        assert!(message.contains("patch context did not match target file"));
+        assert!(!message.contains("<patch>:4:1"));
+        assert!(message.contains("4 | -missing = 1"));
+        assert_eq!(
+            message
+                .matches("re-read the target file and regenerate the patch with fresh context")
+                .count(),
+            1
+        );
+        assert!(!message.contains("Patch context could not be matched against the target file"));
+        assert!(message.contains("= action: 1"));
+        assert!(message.contains("= hunk: 1"));
+        assert!(!message.contains("failed file groups:"));
+        assert!(message.contains("\ncaused by:\n"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_first_removed_line_when_context_precedes_mismatch() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "context\nother\nvalue = 1\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n context\n other\n-missing = 1\n+value = 2\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("patch should fail");
+
+        let message = err.to_string();
+        assert!(!message.contains("<patch>:6:1"));
+        assert!(message.contains("6 | -missing = 1"));
+        assert!(!message.contains("3 | @@"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_target_anchor_for_context_guided_mismatch() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("app.py"),
+        "def handler():\n    value = 1\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: app.py\n@@ def handler():\n-    missing = 1\n+    value = 2\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("patch should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("MATCH_INVALID_CONTEXT"));
+        assert!(message.contains("= target anchor: app.py:1:1"));
+        assert!(!message.contains("<patch>:4:1"));
+        assert!(message.contains("4 | -    missing = 1"));
+        assert!(message.contains("1 | def handler():"));
+        assert!(message.contains("^ matched context"));
+        assert_eq!(
+            message
+                .matches("re-read the target file and regenerate the patch with fresh context")
+                .count(),
+            1
+        );
+        assert!(message.contains("Failed to find expected lines in"));
+        assert!(!message.contains("Patch context could not be matched against the target file"));
+        assert!(!message.contains("failed file groups:"));
+        assert!(message.contains("\ncaused by:\n"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_commit_stage_source_span_for_write_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("name.txt"), "from\n")?;
+    std::fs::write(temp.path().join("blocked"), "not a directory\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: src/name.txt\n*** Move to: blocked/dir/name.txt\n@@\n-from\n+new\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("patch should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("TARGET_WRITE_ERROR"));
+        assert!(!message.contains("<patch>:3:1"));
+        assert!(message.contains("3 | *** Move to: blocked/dir/name.txt"));
+        assert!(message.contains("= action: 1"));
+        assert_eq!(
+            message
+                .matches("repair the target path permissions or filesystem state and retry")
+                .count(),
+            1
+        );
+        assert!(!message.contains("failed file groups:"));
+        assert!(message.contains("\ncaused by:\n"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_update_target_missing_as_compact_full_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("missing update target should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("UPDATE_TARGET_MISSING"));
+        assert!(!message.contains("<patch>:2:1"));
+        assert!(message.contains("2 | *** Update File: missing.txt"));
+        assert_eq!(
+            message
+                .matches("create the file first or use Add File if you intend to create it")
+                .count(),
+            1
+        );
+        assert!(message.contains("Failed to read file to update"));
+        assert!(!message.contains("failed file groups:"));
+        assert!(message.contains("\ncaused by:\n"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_delete_target_missing_as_compact_full_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch\n"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("missing delete target should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("DELETE_TARGET_MISSING"));
+        assert!(!message.contains("<patch>:2:1"));
+        assert!(message.contains("2 | *** Delete File: missing.txt"));
+        assert_eq!(
+            message
+                .matches("re-read the workspace and remove the delete if the file is already gone")
+                .count(),
+            1
+        );
+        assert!(message.contains("Failed to delete file"));
+        assert!(!message.contains("failed file groups:"));
+        assert!(message.contains("\ncaused by:\n"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_reports_partial_success_with_applied_files() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("partial apply should still surface as failure");
+
+        let message = err.to_string();
+        assert!(message.contains("PARTIAL_UNIT_FAILURE"));
+        assert!(message.contains("patch partially applied"));
+        assert!(!message.contains("<patch>:4:1"));
+        assert!(message.contains("4 | *** Update File: missing.txt"));
+        assert!(message.contains("committed changes:"));
+        assert!(message.contains("A created.txt"));
+        assert!(message.contains("failed file groups:"));
+        assert!(message.contains("error[UPDATE_TARGET_MISSING]"));
+        assert!(message.contains("M missing.txt"));
+        assert!(message.contains("retry only the failing group"));
+        assert!(message.contains("do not reapply committed groups unchanged"));
+        assert_eq!(
+            message
+                .matches("create the file first or use Add File if you intend to create it")
+                .count(),
+            1
+        );
+        assert!(!message.contains("full committed change list written to"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("created.txt"))?,
+            "hello\n"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_enumerates_large_committed_file_lists_without_omission_prose() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let mut patch = String::from("*** Begin Patch\n");
+        for index in 0..10 {
+            patch.push_str(&format!(
+                "*** Add File: created-{index}.txt\n+hello {index}\n"
+            ));
+        }
+        patch.push_str("*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n");
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({ "patch": patch }))),
+                task: None,
+            })
+            .await
+            .expect_err("partial apply should fail with summary");
+
+        let message = err.to_string();
+        assert!(message.contains("committed changes:"));
+        assert!(!message.contains("showing 8 of 10"));
+        assert!(!message.contains("... and 2 more committed changes"));
+        assert!(!message.contains("full committed change list written to"));
+        assert!(message.contains("A created-0.txt"));
+        assert!(message.contains("A created-7.txt"));
+        assert!(message.contains("A created-8.txt"));
+        assert!(message.contains("A created-9.txt"));
+        assert_no_audit_patch_artifacts(temp.path(), &message);
+        assert_failed_patch_source_persisted(temp.path(), &message);
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_rolls_back_failed_move_group() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("name.txt"), "from\n")?;
+    std::fs::write(temp.path().join("blocked"), "not a directory\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+        .call_tool(CallToolRequestParams {
+            meta: None,
+            name: "apply_patch".into(),
+            arguments: Some(json_object(json!({
+                "patch": format!(
+                    "*** Begin Patch\n*** Update File: {}\n*** Move to: {}\n@@\n-from\n+new\n*** End Patch\n",
+                    temp.path().join("src").join("name.txt").display(),
+                    temp.path().join("blocked").join("dir").join("name.txt").display()
+                )
+            }))),
+            task: None,
+        })
+        .await
+        .expect_err("move group should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("TARGET_WRITE_ERROR"));
+        assert!(!message.contains("failed file groups:"));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("src").join("name.txt"))?,
+            "from\n"
+        );
+
+        Ok(())
+    })
+}

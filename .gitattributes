@@ -1,0 +1,6 @@
+codex-apply-patch/tests/fixtures/scenarios/014_update_file_preserves_eof_without_trailing_newline/input/no_newline.txt -text
+codex-apply-patch/tests/fixtures/scenarios/014_update_file_preserves_eof_without_trailing_newline/expected/no_newline.txt -text
+codex-apply-patch/tests/fixtures/scenarios/024_update_file_preserves_crlf/input/crlf.txt -text
+codex-apply-patch/tests/fixtures/scenarios/024_update_file_preserves_crlf/expected/crlf.txt -text
+codex-apply-patch/tests/fixtures/scenarios/025_update_file_preserves_local_mixed_newline/input/mixed.txt -text
+codex-apply-patch/tests/fixtures/scenarios/025_update_file_preserves_local_mixed_newline/expected/mixed.txt -text

@@ -1,0 +1,22 @@
+[package]
+name = "docutouch-server"
+version = "0.1.0"
+edition.workspace = true
+
+[[bin]]
+name = "docutouch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+docutouch-core = { path = "../docutouch-core" }
+indoc = "2.0.7"
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shlex = "1.3.0"
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

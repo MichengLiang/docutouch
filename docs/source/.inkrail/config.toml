@@ -1,0 +1,31 @@
+version = 1
+
+roots = ["."]
+exclude = [
+  ".venv",
+  "node_modules",
+  "_build",
+  "temporary",
+  "_temporary",
+]
+
+extensions = [".md"]
+
+[check]
+orphan = "warn"
+duplicate = "fatal"
+broken = "error"
+
+[walk]
+default_direction = "both"
+default_depth = 2
+default_limit = 80
+show_locations = true
+
+[syntax]
+explicit_targets = true
+implicit_targets = false
+attrs_targets = false
+directive_name_targets = false
+ref_role = true
+explicit_text_ref = true

@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    "docutouch-core",
+    "docutouch-server",
+]
+exclude = [
+    "codex-apply-patch",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0"
+ignore = "0.4"
+rmcp = { version = "0.15.0", default-features = false, features = ["server", "client", "macros", "transport-io", "transport-child-process", "schemars"] }
+schemars = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+shlex = "1.3.0"
+tempfile = "3.15"
+time = { version = "0.3", features = ["formatting", "local-offset"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "io-std", "process", "sync"] }

@@ -154,7 +154,7 @@ CLI 也围绕 repair loop 打磨过。`patch` 既支持 stdin，也支持 patch 
 
 ## 安装与前提
 
-当前公开安装路径是 source build。
+当前主要的公开安装路径是 GitHub Releases 和 source build。
 
 前提：
 
@@ -168,7 +168,23 @@ CLI 也围绕 repair loop 打磨过。`patch` 既支持 stdin，也支持 patch 
 cargo build
 ```
 
+release 资产的目标形态是：
+
+- `docutouch-x86_64-pc-windows-msvc.exe`
+- `docutouch-x86_64-unknown-linux-gnu`
+- `SHA256SUMS.txt`
+
+仓库侧也已经可以为下面这个 scoped npm wrapper 准备发布：
+
+```text
+@michengliang/docutouch
+```
+
+但需要区分两层：repo 里可以准备好 npm trusted-publishing workflow，而 npm 网站侧仍然需要为这个包完成 trusted publisher 绑定后，自动发布才会真正成功。
+
 ## 快速开始
+
+当 GitHub Release 已经存在时，你也可以直接下载对应平台的 release binary，而不是从 source build 开始。
 
 启动 stdio MCP server：
 
@@ -226,6 +242,15 @@ cargo run -p docutouch-server -- patch --numbered-evidence-mode full retry.patch
 ```bash
 cat retry.patch | cargo run -p docutouch-server -- patch
 ```
+
+当 scoped npm wrapper 发布后，Node 侧的目标入口会是：
+
+```bash
+npx @michengliang/docutouch
+npm install -g @michengliang/docutouch
+```
+
+这个 npm 包只是一个薄 launcher，会去调用 GitHub Release 的二进制，而不是再做第二份实现。
 
 对 `.docutouch/failed-patches/*.patch` 这类 repair artifact file，CLI 会恢复它所属的 workspace anchor。
 

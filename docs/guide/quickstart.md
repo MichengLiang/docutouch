@@ -16,6 +16,13 @@
 cargo build
 ```
 
+如果你不想从源码构建，也可以直接使用：
+
+- GitHub Releases: `https://github.com/MichengLiang/docutouch/releases`
+- npm launcher: `npx @michengliang/docutouch`
+
+如果当前 tag 已经有 GitHub Release，你也可以直接下载对应平台的 release binary，而不是先从 source build 开始。
+
 ## 启动 stdio MCP server
 
 ```bash
@@ -52,12 +59,33 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 }
 ```
 
+如果通过 npm launcher 接入：
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@michengliang/docutouch"],
+  "env": {
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  }
+}
+```
+
+repo 里可以同时准备 npm trusted-publishing workflow，但 npm package settings 侧仍然需要把 trusted publisher 绑定完成后，自动发布才会真正生效。
+
 ## 直接调用 CLI
 
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
+```
+
+当 scoped npm wrapper `@michengliang/docutouch` 首次发布后，也可以用：
+
+```bash
+npx @michengliang/docutouch
 ```
 
 ## 一个最短的 patch 调用

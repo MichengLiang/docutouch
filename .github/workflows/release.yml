@@ -1,0 +1,79 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: build-${{ matrix.target_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target_name: windows-x64
+            asset_name: docutouch-x86_64-pc-windows-msvc.exe
+            binary_path: target/release/docutouch.exe
+          - os: ubuntu-latest
+            target_name: linux-x64
+            asset_name: docutouch-x86_64-unknown-linux-gnu
+            binary_path: target/release/docutouch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build docutouch release binary
+        run: cargo build --locked --release -p docutouch-server
+
+      - name: Stage release asset (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item "${{ matrix.binary_path }}" "dist/${{ matrix.asset_name }}"
+
+      - name: Stage release asset (Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.binary_path }}" "dist/${{ matrix.asset_name }}"
+          chmod +x "dist/${{ matrix.asset_name }}"
+
+      - name: Upload staged asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+
+  github-release:
+    name: github-release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download staged assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+

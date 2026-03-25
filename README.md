@@ -154,7 +154,7 @@ Typical cases:
 
 ## Installation And Prerequisites
 
-The current public installation path is source build.
+The primary public installation path is GitHub Releases plus source build.
 
 Prerequisites:
 
@@ -168,7 +168,23 @@ Build the workspace:
 cargo build
 ```
 
+Release binaries are intended to ship as:
+
+- `docutouch-x86_64-pc-windows-msvc.exe`
+- `docutouch-x86_64-unknown-linux-gnu`
+- `SHA256SUMS.txt`
+
+The repository is also prepared for a scoped npm wrapper package:
+
+```text
+@michengliang/docutouch
+```
+
+The repo-side npm trusted-publishing workflow can be committed here, but npm still requires the package-side trusted publisher binding to be completed in npm package settings before fully automated publishing will succeed.
+
 ## Quick Start
+
+Once a GitHub Release exists, you can also download the platform binary directly from the release assets instead of building from source.
 
 Start the stdio MCP server:
 
@@ -226,6 +242,15 @@ Or replay from stdin after editing the patch text:
 ```bash
 cat retry.patch | cargo run -p docutouch-server -- patch
 ```
+
+Once the scoped npm wrapper is published, the intended Node-side entry points are:
+
+```bash
+npx @michengliang/docutouch
+npm install -g @michengliang/docutouch
+```
+
+The npm wrapper is designed as a thin launcher over GitHub Release binaries rather than a second implementation of the tool.
 
 For `.docutouch/failed-patches/*.patch` repair artifacts, the CLI restores the owning workspace anchor automatically.
 

@@ -19,6 +19,12 @@ cargo run -p docutouch-server
 cargo run -p docutouch-server -- serve
 ```
 
+如果你使用 npm launcher，也可以：
+
+```bash
+npx @michengliang/docutouch
+```
+
 ## 默认 workspace
 
 如果你希望在启动时预设默认 workspace：
@@ -48,7 +54,22 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 }
 ```
 
+通过 npm launcher 的最小配置示例：
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@michengliang/docutouch"],
+  "env": {
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  }
+}
+```
+
 如果你的宿主会在连接后立刻调用 `set_workspace`，也可以不设置默认 workspace。
+
+仓库侧可以同时准备 npm trusted-publishing workflow，但 npm package settings 侧仍然需要完成 trusted publisher 绑定后，release 驱动的自动 npm publish 才会真正成功。
 
 ## 公开工具面
 

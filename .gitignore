@@ -155,6 +155,7 @@ _temporary/
 .jupyter_ystore.db
 
 node_modules/
+npm/vendor/
 
 docs/skills/
 .turbo/

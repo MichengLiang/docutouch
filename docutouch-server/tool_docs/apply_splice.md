@@ -150,7 +150,9 @@ Delete shape:
 * Same-file overlap is illegal only when the selected source range overlaps the anchored target range in that original snapshot.
 * `Append To File` may create a missing destination file.
 * `Insert Before In File`, `Insert After In File`, and `Replace In File` require the target file and target selection to already exist.
-* Transferred source bytes are preserved verbatim, including newline bytes and EOF-without-newline state.
+* Ordinary transfer keeps the selected source bytes and newline bytes intact where that does not break line structure in the target result.
+* When the selected source range ends on the source file's final line without a terminal newline, and the target-side boundary would otherwise concatenate two lines, runtime normalizes the transfer result with a target-style line separator.
+* This newline-boundary normalization applies only to the target/result composition for the current action; it does not rewrite the source file's own EOF state.
 
 ### Execution Semantics
 
@@ -159,6 +161,7 @@ Delete shape:
 * `Copy/Move + Insert Before/After` uses the validated target selection as the insertion anchor.
 * `Copy/Move + Replace` replaces the validated target range with the selected source bytes.
 * `Delete Span` removes the validated source range and performs no target write.
+* Transfer-family actions must preserve line separation in the target result; they do not intentionally create same-line concatenation from an EOF-without-newline source selection.
 * Each splice action is a connected mutation unit.
 * Disjoint connected units may partially succeed.
 * A connected mutation unit must not leave a move half-applied.

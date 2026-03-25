@@ -154,6 +154,13 @@ double-lock validation 的两把锁是：
 - `Copy / Move + Replace`：以 source block 替换 target range，仅在 `Move` 时删除 source。
 - `Delete Span`：删除 source range，不进行目标侧写入。
 
+对于 transfer family，还存在一条 targeted newline-boundary rule：
+
+- 若 source selection 命中 source 文件的最后一行且该行不带 terminal newline；
+- 并且当前 target-side boundary 若按 raw byte transfer 继续执行会把两段本应分属不同行的文本拼接到同一行；
+- runtime 应在 result-side compose 阶段补入 target-style line separator，以维持 line-oriented transfer 结果；
+- 该补入仅作用于本次 target/result 组合，不回写 source 文件本身。
+
 同一 envelope 内可包含多个显式 splice action；每个 action 仍然是独立的 source-to-target instruction。
 
 ## Atomicity And Diagnostics
@@ -182,7 +189,9 @@ diagnostics contract 保持与现有 patch tooling 风格一致：
 - 对 `Insert Before`、`Insert After`、`Replace` 而言，same-file overlap 仅在 source range 与 anchored target range 重叠时才属于非法情况，并应返回稳定 overlap-class diagnostic；
 - `Append To File` 可以创建缺失目标文件；
 - `Insert Before In File`、`Insert After In File`、`Replace In File` 要求目标文件与目标 selection 已存在；
-- source text verbatim preserved，包括 newline bytes。
+- ordinary transfer 继续保留 source text 与 newline bytes 的主要可见内容；
+- 但若 source selection 命中 EOF final line 且缺少 terminal newline，当前 target-side boundary 又会导致 same-line concatenation，runtime 应优先维持 line boundary，而不是把 EOF-without-newline state 原样扩散到目标结果中；
+- 这类 newline-boundary normalization 只影响本次 target/result 组合，不改写 source 文件自身的 EOF 状态。
 
 ## Acceptance Boundary
 

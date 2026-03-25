@@ -4,13 +4,13 @@
 ## Task Objective
 
 实现 `apply_splice` 的 runtime core，
-先把 action semantics、same-file rule、target existence 与 byte-preserving transfer 做成可测试的执行层，
+先把 action semantics、same-file rule、target existence 与 targeted result-side transfer normalization 做成可测试的执行层，
 不越界到 transport wiring 或最终 user-facing diagnostics/presentation。
 
 ## Current Standing
 
 - closed
-- runtime core、same-file rule、target existence、byte-preserving transfer、connected-unit grouping 与 partial-success accounting 已闭合
+- runtime core、same-file rule、target existence、ordinary byte-faithful transfer plus EOF-final-line boundary normalization、connected-unit grouping 与 partial-success accounting 已闭合
 - splice diagnostics family 与 authored-line blame 已直接落到 runtime-owned surface
 
 ## Read These First
@@ -42,13 +42,13 @@
 - support for the current action basis at the semantic layer
 - same-file original-snapshot interpretation and overlap rejection only when the same-file source range overlaps the anchored target range
 - append-create behavior for missing destination files and failure for missing anchored targets
-- tests that assert resulting filesystem state and raw transferred content behavior
+- tests that assert resulting filesystem state, ordinary raw transferred content behavior, and EOF-final-line boundary normalization
 
 ## Verification Criteria
 
 - runtime tests pass
 - existing parser/selection tests continue to pass
-- moved/copied spans preserve source bytes rather than reconstructing text loosely
+- moved/copied spans preserve source bytes on ordinary paths while preventing deterministic same-line concatenation when a source EOF final line lacks a terminal newline
 - no transport or user-facing presentation coupling is introduced
 
 ## Escalation Conditions

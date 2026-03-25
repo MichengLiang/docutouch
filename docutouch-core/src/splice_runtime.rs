@@ -753,6 +753,14 @@ fn plan_transfer_action(
         &target,
     )?;
 
+    let transferred_bytes = normalize_transfer_bytes_for_target_boundary(
+        transferred_bytes,
+        &source_selection,
+        source_bytes.len(),
+        &target,
+        original_state,
+    );
+
     Ok(PlannedTransferAction {
         source_kind: action.source_kind,
         source_path,
@@ -761,6 +769,96 @@ fn plan_transfer_action(
         target,
         target_anchor,
     })
+}
+
+fn normalize_transfer_bytes_for_target_boundary(
+    transferred_bytes: Vec<u8>,
+    source_selection: &ResolvedByteSelection,
+    source_file_len: usize,
+    target: &RuntimeTarget,
+    original_state: &PathStateMap,
+) -> Vec<u8> {
+    if transferred_bytes.is_empty()
+        || source_selection.end_offset != source_file_len
+        || ends_with_line_break(&transferred_bytes)
+    {
+        return transferred_bytes;
+    }
+
+    let target_path = target_runtime_path(target);
+    let target_bytes = original_state
+        .get(&target_path.key)
+        .and_then(|state| state.contents.as_deref())
+        .unwrap_or_default();
+    let (needs_prefix, needs_suffix) = requires_line_boundary_normalization(target, target_bytes);
+    if !needs_prefix && !needs_suffix {
+        return transferred_bytes;
+    }
+
+    let newline = preferred_target_newline(target_bytes);
+    let mut normalized = Vec::with_capacity(
+        transferred_bytes.len()
+            + newline.len() * (usize::from(needs_prefix) + usize::from(needs_suffix)),
+    );
+    if needs_prefix {
+        normalized.extend_from_slice(newline);
+    }
+    normalized.extend_from_slice(&transferred_bytes);
+    if needs_suffix {
+        normalized.extend_from_slice(newline);
+    }
+    normalized
+}
+
+fn requires_line_boundary_normalization(
+    target: &RuntimeTarget,
+    target_bytes: &[u8],
+) -> (bool, bool) {
+    match target {
+        RuntimeTarget::Append { .. } => {
+            let boundary = target_bytes.len();
+            (needs_boundary_prefix(target_bytes, boundary), false)
+        }
+        RuntimeTarget::InsertBefore { selection, .. } => (
+            false,
+            needs_boundary_suffix(target_bytes, selection.start_offset),
+        ),
+        RuntimeTarget::InsertAfter { selection, .. } => {
+            let boundary = selection.end_offset;
+            (
+                needs_boundary_prefix(target_bytes, boundary),
+                needs_boundary_suffix(target_bytes, boundary),
+            )
+        }
+        RuntimeTarget::Replace { selection, .. } => (
+            false,
+            needs_boundary_suffix(target_bytes, selection.end_offset),
+        ),
+    }
+}
+
+fn needs_boundary_prefix(target_bytes: &[u8], boundary: usize) -> bool {
+    boundary > 0 && !is_line_break_byte(target_bytes[boundary - 1])
+}
+
+fn needs_boundary_suffix(target_bytes: &[u8], boundary: usize) -> bool {
+    boundary < target_bytes.len() && !is_line_break_byte(target_bytes[boundary])
+}
+
+fn preferred_target_newline(target_bytes: &[u8]) -> &'static [u8] {
+    if target_bytes.windows(2).any(|window| window == b"\r\n") {
+        b"\r\n"
+    } else {
+        b"\n"
+    }
+}
+
+fn ends_with_line_break(bytes: &[u8]) -> bool {
+    matches!(bytes.last(), Some(b'\n') | Some(b'\r'))
+}
+
+fn is_line_break_byte(byte: u8) -> bool {
+    byte == b'\n' || byte == b'\r'
 }
 
 fn selection_failure(

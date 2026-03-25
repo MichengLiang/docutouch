@@ -82,6 +82,56 @@ fn splice_runtime_move_append_removes_source_range() {
 }
 
 #[test]
+fn splice_runtime_move_insert_before_normalizes_missing_terminal_newline_at_source_eof() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        temp.path().join("source.txt"),
+        b"Line A\nLine B\nLine C\nLine D",
+    )
+    .expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), "Target start\nTarget end\n").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Move From File: source.txt
+@@
+4 | Line D
+*** Insert Before In File: dest.txt
+@@
+2 | Target end
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(
+        read(&temp.path().join("source.txt")),
+        "Line A\nLine B\nLine C\n"
+    );
+    assert_eq!(
+        read(&temp.path().join("dest.txt")),
+        "Target start\nLine D\nTarget end\n"
+    );
+}
+
+#[test]
+fn splice_runtime_append_normalizes_missing_terminal_newline_at_source_eof() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("source.txt"), b"alpha\nbeta").expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), "tail").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Copy From File: source.txt
+@@
+2 | beta
+*** Append To File: dest.txt
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(read(&temp.path().join("source.txt")), "alpha\nbeta");
+    assert_eq!(read(&temp.path().join("dest.txt")), "tail\nbeta");
+}
+
+#[test]
 fn splice_runtime_copy_insert_before_uses_target_range_start() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(temp.path().join("source.txt"), "alpha\n").expect("write source");
@@ -101,6 +151,29 @@ fn splice_runtime_copy_insert_before_uses_target_range_start() {
     assert_eq!(
         read(&temp.path().join("dest.txt")),
         "one\nalpha\ntwo\nthree\n"
+    );
+}
+
+#[test]
+fn splice_runtime_insert_before_uses_target_newline_style_for_normalization() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("source.txt"), b"alpha\r\nbeta").expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), b"one\r\ntwo\r\nthree\r\n").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Copy From File: source.txt
+@@
+2 | beta
+*** Insert Before In File: dest.txt
+@@
+2 | two
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(
+        std::fs::read(temp.path().join("dest.txt")).expect("read dest bytes"),
+        b"one\r\nbeta\r\ntwo\r\nthree\r\n"
     );
 }
 
@@ -128,6 +201,26 @@ fn splice_runtime_copy_insert_after_uses_target_range_end() {
 }
 
 #[test]
+fn splice_runtime_insert_after_final_target_line_without_newline_normalizes_prefix_boundary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("source.txt"), b"alpha\nbeta").expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), "one\ntwo").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Copy From File: source.txt
+@@
+2 | beta
+*** Insert After In File: dest.txt
+@@
+2 | two
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(read(&temp.path().join("dest.txt")), "one\ntwo\nbeta");
+}
+
+#[test]
 fn splice_runtime_move_replace_replaces_target_and_removes_source() {
     let temp = tempfile::tempdir().expect("tempdir");
     std::fs::write(temp.path().join("source.txt"), "alpha\nbeta\n").expect("write source");
@@ -148,6 +241,46 @@ fn splice_runtime_move_replace_replaces_target_and_removes_source() {
     apply_splice_program(program, temp.path()).expect("runtime should succeed");
     assert_eq!(read(&temp.path().join("source.txt")), "");
     assert_eq!(read(&temp.path().join("dest.txt")), "one\nalpha\nbeta\n");
+}
+
+#[test]
+fn splice_runtime_replace_normalizes_missing_terminal_newline_at_source_eof() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("source.txt"), b"alpha\nbeta").expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), "one\ntwo\nthree\n").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Copy From File: source.txt
+@@
+2 | beta
+*** Replace In File: dest.txt
+@@
+2 | two
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(read(&temp.path().join("dest.txt")), "one\nbeta\nthree\n");
+}
+
+#[test]
+fn splice_runtime_replace_final_target_line_without_newline_does_not_insert_extra_blank_line() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("source.txt"), b"alpha\nbeta").expect("write source");
+    std::fs::write(temp.path().join("dest.txt"), "one\ntwo").expect("write dest");
+
+    let program = "*** Begin Splice
+*** Copy From File: source.txt
+@@
+2 | beta
+*** Replace In File: dest.txt
+@@
+2 | two
+*** End Splice
+";
+
+    apply_splice_program(program, temp.path()).expect("runtime should succeed");
+    assert_eq!(read(&temp.path().join("dest.txt")), "one\nbeta");
 }
 
 #[test]

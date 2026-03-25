@@ -45,6 +45,7 @@
 - 使用 visible content 做 double-lock validation
 - omission marker 是正式语法的一部分
 - `Delete Span` 是 first-class action
+- 当 source selection 命中 source 文件最后一行且缺少 terminal newline，而当前 target-side boundary 会把两行拼在一起时，runtime 会只在本次结果侧补出 line separator；它不会回写 source 文件本身
 
 典型形态如下：
 

@@ -3,7 +3,7 @@
 ## Readiness Scope
 
 Define the release-entry readiness surface for the first accepted implementation closure
-of `apply_splice`, covering grammar, semantics, byte fidelity, atomicity, diagnostics,
+of `apply_splice`, covering grammar, semantics, transfer fidelity and newline-boundary normalization, atomicity, diagnostics,
 transport parity, and documentation truthfulness.
 
 ## Target Gate
@@ -61,8 +61,7 @@ transport parity, and documentation truthfulness.
   truncation.
 - `AG-03 Deterministic Same-File Behavior`: same-file programs resolve against one
   original snapshot and reject overlap or intermediate-state dependence in v1.
-- `AG-04 Byte Fidelity`: transferred bytes equal the exact source interval, including
-  separators and EOF-without-newline state.
+- `AG-04 Transfer Fidelity And Line-Boundary Preservation`: ordinary transfer keeps source content and newline bytes intact where possible, while EOF-final-line selections that would otherwise concatenate target lines are normalized in the result without rewriting source state.
 - `AG-05 Atomic And Accounted Mutation`: connected units commit atomically, disjoint
   units may partially succeed, and the output keeps the result repair-accounted.
 - `AG-06 Honest Diagnostics`: failures carry stable codes, truthful blame, and compact
@@ -79,7 +78,7 @@ transport parity, and documentation truthfulness.
 | `GRAM` | Is the authored surface exact, structurally closed, and no-write on malformed input? | `E1`, `E2`, `E5`; plus `E3` for truncation-specific failures |
 | `SEL` | Do source and target selections use double-lock validation and contiguous denotation? | `E1`, `E2`, `E3`, `E5` |
 | `SAME` | Do same-file programs use one original snapshot, reject overlap, and translate legal moves correctly? | `E1`, `E2`, `E3`, `E5` |
-| `BYTE` | Are source bytes, separators, mixed newlines, empty lines, and adjacent bytes preserved exactly? | `E1` where semantic wording matters; `E2` and `E5` with raw-byte assertions |
+| `BYTE` | Are source bytes, separators, mixed newlines, and empty lines preserved faithfully, while EOF-final-line transfer edge cases normalize target-side line boundaries instead of concatenating lines? | `E1` where semantic wording matters; `E2` and `E5` with raw-byte assertions plus boundary-normalization coverage |
 | `ATOM` | Are commit units grouped, planned, rolled back, and summarized correctly? | `E1`, `E2`, `E3`, `E4`, `E5` depending on visible outcome surface |
 | `DIAG` | Are diagnostic families, blame hierarchy, partial-success accounting, and repair-first inline behavior stable? | `E1`, `E3`, `E4`, `E5` |
 | `PAR` | Do MCP and CLI expose the same success/failure, path anchoring, and host-audit boundary? | `E1` for anchoring rules, `E4`, `E5` |
@@ -93,8 +92,7 @@ transport parity, and documentation truthfulness.
   numbering, range-based anchored targets, and narrow target-existence rules.
 - Same-file gate: one original snapshot, no intermediate-state reinterpretation, overlap
   rejection, correct non-overlapping move translation, and deterministic same-file copy.
-- Byte gate: raw-byte equality for transferred intervals, exact separator preservation,
-  mixed-newline stability, and no trimming or reconstruction of empty/whitespace lines.
+- Byte gate: raw-byte equality for ordinary transferred intervals, mixed-newline stability, no trimming or reconstruction of empty/whitespace lines, and targeted result-side line-boundary normalization when an EOF-final-line source selection would otherwise concatenate target text.
 - Atomicity gate: alias-aware connected-unit grouping, full planning before writes,
   rollback under write failure, correct full-success / partial-success / failure status,
   and family-compatible `A/M/D` summaries.
@@ -129,7 +127,7 @@ transport parity, and documentation truthfulness.
 - every user-visible failure class has presentation assertions
 - every transport-visible behavior has parity coverage
 - the full action basis is reviewable as explicit inventory rather than scattered guesswork
-- byte-fidelity coverage uses raw-byte assertions in addition to line-oriented checks
+- transfer-fidelity coverage uses raw-byte assertions for ordinary paths in addition to dedicated EOF-final-line boundary-normalization checks
 - partial-success coverage asserts both rendered output and resulting filesystem state
 - example snippets used in docs remain traceable to tests
 

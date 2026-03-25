@@ -13,7 +13,7 @@
 | parser / authored grammar | closed | canonical envelope、action headers、side-specific omission tokens 与 horizontal truncation rejection 已稳定 |
 | selection resolution | closed | deterministic contiguous denotation、source/target mismatch blame 与 authored-line diagnostics 已稳定 |
 | shared substrate extraction | closed | `mutation_support.rs` 已承载 path identity、normalization、affected-path merge，并对 splice runtime 复用 |
-| runtime core | closed | full action basis、alias-aware connected-unit grouping、original-snapshot planning、partial-success accounting 与 byte fidelity 已闭合 |
+| runtime core | closed | full action basis、alias-aware connected-unit grouping、original-snapshot planning、partial-success accounting 与 targeted newline-boundary normalization 已闭合 |
 | CLI / MCP surface | closed | CLI/MCP parity、splice-source-aware diagnostics 与当前 outer-surface contract 已落地 |
 | diagnostics family hardening | closed | outer surface 已切换到 structured `error[SPLICE_*]: ...` contract |
 | execution accounting / release-grade QA closure | closed | cargo test、CLI/MCP parity 与 docs truthfulness 已全部通过 |

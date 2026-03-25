@@ -66,7 +66,7 @@ accepted architecture direction 是：
 - source / target selection resolver
 - line-bearing selection surface, including omission-backed boundary anchors as the default authored compression shape
 - same-file original-snapshot rule and overlap legality
-- source-byte transfer semantics and newline / EOF fidelity policy
+- transfer semantics, including newline / EOF policy and target/result-side line-boundary normalization
 - splice-specific diagnostics vocabulary and blame hierarchy
 - transfer / removal action semantics
 - transport wiring and tool docs that describe `apply_splice` itself

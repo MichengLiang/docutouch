@@ -76,6 +76,11 @@ The current runtime supports the locked action basis:
 * `Copy From File` + `Replace In File`
 * `Move From File` + `Replace In File`
 
+### Action Authoring Preference
+
+* Prefer `Delete Span From File` when removing an existing contiguous span without target-side transfer.
+* For larger removals, prefer `Delete Span` over restating the removed body through a patch-style deletion.
+
 ### Canonical Authored Shapes
 
 Append shape:
@@ -84,8 +89,9 @@ Append shape:
 *** Begin Splice
 *** Copy From File: source.py
 @@
-12 | def build_context():
-13 |     return "strict"
+12 | def build_context(...)
+... source lines omitted ...
+19 |     return "strict"
 *** Append To File: target.py
 *** End Splice
 ```
@@ -128,6 +134,14 @@ Delete shape:
 * Omission tokens denote contiguous omitted lines, not sparse sampling.
 * Source selections use `... source lines omitted ...`.
 * Target selections use `... target lines omitted ...`.
+
+### Selection Authoring Preference
+
+* Prefer omission-backed boundary anchors for multi-line selections.
+* Default to one starting numbered line, one omission token, and one ending numbered line when the omitted interior is contiguous and not independently required.
+* Expand interior numbered lines only when the shorter boundary-anchored form would be ambiguous or when the full interior span is itself the intended evidence.
+* For anchored target actions, prefer the shortest truthful target selection that still locks the intended anchor or replacement range.
+* For every numbered line you do include, reproduce the full visible line content.
 
 ### Same-File And Destination Rules
 

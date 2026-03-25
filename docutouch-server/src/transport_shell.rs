@@ -14,39 +14,35 @@ pub(crate) struct TransportInvocation {
 }
 
 impl TransportInvocation {
-    pub(crate) fn for_cli(cwd: PathBuf, source: TransportSourceProvenance) -> Self {
+    pub(crate) fn with_anchors(
+        execution_anchor_dir: PathBuf,
+        display_anchor_dir: Option<PathBuf>,
+        source: TransportSourceProvenance,
+    ) -> Self {
         Self {
-            execution_anchor_dir: cwd.clone(),
-            display_anchor_dir: Some(cwd),
+            execution_anchor_dir,
+            display_anchor_dir,
             source,
         }
     }
 
+    pub(crate) fn for_cli(cwd: PathBuf, source: TransportSourceProvenance) -> Self {
+        Self::with_anchors(cwd.clone(), Some(cwd), source)
+    }
+
     pub(crate) fn for_workspace(workspace: PathBuf, source: TransportSourceProvenance) -> Self {
-        Self {
-            execution_anchor_dir: workspace.clone(),
-            display_anchor_dir: Some(workspace),
-            source,
-        }
+        Self::with_anchors(workspace.clone(), Some(workspace), source)
     }
 
     pub(crate) fn for_execution_only(
         anchor_dir: PathBuf,
         source: TransportSourceProvenance,
     ) -> Self {
-        Self {
-            execution_anchor_dir: anchor_dir,
-            display_anchor_dir: None,
-            source,
-        }
+        Self::with_anchors(anchor_dir, None, source)
     }
 
     pub(crate) fn unanchored(source: TransportSourceProvenance) -> Self {
-        Self {
-            execution_anchor_dir: PathBuf::new(),
-            display_anchor_dir: None,
-            source,
-        }
+        Self::with_anchors(PathBuf::new(), None, source)
     }
 
     pub(crate) fn execution_anchor_dir(&self) -> &Path {

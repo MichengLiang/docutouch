@@ -83,6 +83,7 @@ cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 cat fix.patch | cargo run -p docutouch-server -- patch
+cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
 ```
 
 `splice` 也可以从 stdin 读取：
@@ -90,6 +91,31 @@ cat fix.patch | cargo run -p docutouch-server -- patch
 ```bash
 Get-Content move.splice | cargo run -p docutouch-server -- splice
 ```
+
+### Patch Retry Artifact Workflow
+
+`patch` 的默认相对路径锚点仍然是调用时 CWD。
+
+但当 CLI 以 file-backed source 读取一个位于 `<workspace>/.docutouch/failed-patches/*.patch` 下的 failed patch artifact 时，
+会自动把 execution/display anchor 恢复到该 artifact 所属的 workspace root。
+
+这意味着：
+
+- ordinary patch file 继续相对调用时 cwd 执行；
+- DocuTouch 自己生成的 failed patch artifact 可以被直接编辑后重放；
+- 重放失败时，diagnostics 继续指向原 patch file，而不是再生成第二层 failed-patches 副本。
+
+典型 repair loop 是：
+
+```powershell
+Get-Content -Raw .docutouch\failed-patches\1712345678901-0.patch |
+  cargo run -p docutouch-server -- patch
+
+cargo run -p docutouch-server -- patch .docutouch\failed-patches\1712345678901-0.patch
+```
+
+推荐仍然从目标 workspace 内执行命令；
+但如果显式传入的是 failed patch artifact file path，CLI 会按上述规则恢复其 workspace anchor。
 
 ## 测试
 

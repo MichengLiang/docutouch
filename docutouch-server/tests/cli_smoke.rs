@@ -707,6 +707,71 @@ fn cli_patch_file_failure_preserves_original_patch_file_path() -> anyhow::Result
 }
 
 #[test]
+fn cli_failed_patch_artifact_recovers_workspace_anchor_outside_invocation_cwd(
+) -> anyhow::Result<()> {
+    let workspace = tempfile::tempdir()?;
+    let invocation_cwd = tempfile::tempdir()?;
+    std::fs::create_dir_all(workspace.path().join("src"))?;
+    std::fs::create_dir_all(workspace.path().join(".docutouch").join("failed-patches"))?;
+    std::fs::write(workspace.path().join("src").join("name.txt"), "from\n")?;
+    std::fs::write(workspace.path().join("blocked"), "not a directory\n")?;
+    let patch_path = workspace
+        .path()
+        .join(".docutouch")
+        .join("failed-patches")
+        .join("retry.patch");
+    std::fs::write(&patch_path, patch_move_write_failure_text())?;
+
+    let cli_output = run_cli(
+        invocation_cwd.path(),
+        &["patch", patch_path.to_str().expect("utf-8 patch path")],
+        None,
+    )?;
+    assert!(!cli_output.status.success());
+    let cli_stderr = utf8(&cli_output.stderr);
+    assert!(utf8(&cli_output.stdout).is_empty());
+    assert!(cli_stderr.contains("TARGET_WRITE_ERROR"), "{cli_stderr}");
+    assert!(
+        cli_stderr.contains(".docutouch/failed-patches/retry.patch"),
+        "{cli_stderr}"
+    );
+    assert!(cli_stderr.contains("= patch: .docutouch/failed-patches/retry.patch"));
+    assert!(
+        !cli_stderr.contains("UPDATE_TARGET_MISSING"),
+        "expected recovered workspace anchor instead of invocation-cwd miss\n{cli_stderr}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("src").join("name.txt"))?,
+        "from\n"
+    );
+    assert!(!invocation_cwd.path().join("src").join("name.txt").exists());
+    Ok(())
+}
+
+#[test]
+fn cli_regular_patch_file_keeps_invocation_cwd_anchor_outside_patch_directory(
+) -> anyhow::Result<()> {
+    let patch_owner = tempfile::tempdir()?;
+    let invocation_cwd = tempfile::tempdir()?;
+    let patch_path = patch_owner.path().join("input.patch");
+    std::fs::write(&patch_path, patch_success_text())?;
+
+    let cli_output = run_cli(
+        invocation_cwd.path(),
+        &["patch", patch_path.to_str().expect("utf-8 patch path")],
+        None,
+    )?;
+    assert!(cli_output.status.success());
+    assert!(utf8(&cli_output.stderr).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(invocation_cwd.path().join("docs").join("notes.md"))?,
+        "hello\n"
+    );
+    assert!(!patch_owner.path().join("docs").join("notes.md").exists());
+    Ok(())
+}
+
+#[test]
 fn cli_splice_file_failure_preserves_original_splice_file_path() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("source.txt"), "alpha\n")?;

@@ -12,9 +12,17 @@ pub(crate) struct PatchInvocationAdapter {
 }
 
 impl PatchInvocationAdapter {
-    pub(crate) fn for_cli(cwd: PathBuf, patch_source: PatchSourceProvenance) -> Self {
+    pub(crate) fn for_cli_with_anchors(
+        execution_anchor_dir: PathBuf,
+        display_anchor_dir: Option<PathBuf>,
+        patch_source: PatchSourceProvenance,
+    ) -> Self {
         Self {
-            transport: TransportInvocation::for_cli(cwd, patch_source),
+            transport: TransportInvocation::with_anchors(
+                execution_anchor_dir,
+                display_anchor_dir,
+                patch_source,
+            ),
         }
     }
 
@@ -80,8 +88,9 @@ mod tests {
 ";
         std::fs::write(&patch_path, patch).expect("write patch file");
 
-        let adapter = PatchInvocationAdapter::for_cli(
+        let adapter = PatchInvocationAdapter::for_cli_with_anchors(
             temp.path().to_path_buf(),
+            Some(temp.path().to_path_buf()),
             PatchSourceProvenance::File(patch_path),
         );
         let error = adapter.execute(patch).expect_err("patch should fail");
@@ -89,6 +98,42 @@ mod tests {
         assert!(error.contains("move-fail.patch:3:1"), "{error}");
         assert!(error.contains("= patch: move-fail.patch"), "{error}");
         assert!(!error.contains(".docutouch/failed-patches/"), "{error}");
+    }
+
+    #[test]
+    fn custom_cli_anchor_can_display_paths_relative_to_recovered_workspace() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(temp.path().join("src")).expect("create src");
+        std::fs::write(temp.path().join("src").join("name.txt"), "from\n").expect("seed source");
+        std::fs::write(temp.path().join("blocked"), "not a directory").expect("seed blocked file");
+        let patch_path = temp
+            .path()
+            .join(".docutouch")
+            .join("failed-patches")
+            .join("retry.patch");
+        std::fs::create_dir_all(patch_path.parent().expect("failed-patches dir"))
+            .expect("create failed-patches dir");
+        let patch = "\
+*** Begin Patch
+*** Update File: src/name.txt
+*** Move to: blocked/dir/name.txt
+@@
+-from
++new
+*** End Patch
+";
+        std::fs::write(&patch_path, patch).expect("write patch file");
+
+        let adapter = PatchInvocationAdapter::for_cli_with_anchors(
+            temp.path().to_path_buf(),
+            Some(temp.path().to_path_buf()),
+            PatchSourceProvenance::File(patch_path),
+        );
+        let error = adapter.execute(patch).expect_err("patch should fail");
+
+        assert!(error.contains(".docutouch/failed-patches/retry.patch:3:1"), "{error}");
+        assert!(error.contains("= patch: .docutouch/failed-patches/retry.patch"), "{error}");
+        assert!(error.contains("TARGET_WRITE_ERROR"), "{error}");
     }
 
     #[test]

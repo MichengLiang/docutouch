@@ -1,4 +1,4 @@
-# (process-assets-apply-splice-engineering-hardening-readiness)=
+(process-assets-apply-splice-engineering-hardening-readiness)=
 # Apply Splice Engineering Hardening Readiness
 
 ## Readiness Scope

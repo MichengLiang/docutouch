@@ -64,6 +64,7 @@ accepted architecture direction 是：
 - public tool identity and user-facing boundary
 - splice envelope grammar and parser
 - source / target selection resolver
+- line-bearing selection surface, including omission-backed boundary anchors as the default authored compression shape
 - same-file original-snapshot rule and overlap legality
 - source-byte transfer semantics and newline / EOF fidelity policy
 - splice-specific diagnostics vocabulary and blame hierarchy
@@ -113,13 +114,34 @@ same-file snapshot、overlap legality、move translation
 属于 splice semantic contract，
 不得下沉到 generic shared helper 后再失去工具边界可见性。
 
-### 4. Diagnostics Family Is Not Borrowed By Implication
+### 4. Authored Selections Stay Line-Bearing
+
+`apply_splice` 的 authored selection surface 不应退化为纯坐标载荷。
+
+accepted architecture 允许 runtime 使用 byte offsets、resolved ranges 与其他内部表示，
+但 public authored form 仍应保留：
+
+- absolute line numbers；
+- visible boundary-line content；
+- omission-backed compact compression for contiguous interior lines。
+
+这条约束的职责是让 selection 继续同时承担 coordinate lock 与 local semantic grounding，
+而不是把 public surface 缩减成只对 runtime 友好的 opaque coordinate blob。
+
+同样地，source-only removal 也不应为了迁就 patch-shaped authoring 心智而退化回“重述被删除全文”的 surface。
+
+在 `apply_splice` 的 accepted architecture 下：
+
+- `Delete Span` 不是 transfer family 的附属例外，而是既有跨度删除的 first-class authored primitive；
+- 对较大的既有删除任务，selection-bearing removal surface 比 restated negative-body patch 更符合 splice 的 product identity。
+
+### 5. Diagnostics Family Is Not Borrowed By Implication
 
 `apply_splice` diagnostics 应与现有 DocuTouch 风格同族，
 但不能因为 patch diagnostics 已存在，
 就默认 splice 可以直接复用 patch 的 code family、blame hierarchy 或 wording。
 
-### 5. Transport Parity Is Downstream Of Semantic Closure
+### 6. Transport Parity Is Downstream Of Semantic Closure
 
 CLI / MCP wiring 必须建立在 splice semantic layer 之后，
 而不是反过来由 transport convenience 决定内层结构。

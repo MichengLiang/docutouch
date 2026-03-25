@@ -59,7 +59,7 @@ diagnostics-family readiness, source-of-truth precedence, and recursive QA struc
 | `SPLICE_SOURCE_SELECTION_INVALID` | source numbered excerpt does not resolve truthfully | source selection block |
 | `SPLICE_TARGET_SELECTION_INVALID` | target numbered excerpt does not resolve truthfully | target selection block |
 | `SPLICE_SELECTION_TRUNCATED` | horizontal truncation or invalid omission form is present | offending selection line |
-| `SPLICE_OVERLAP_ILLEGAL` | same-file overlap violates the v1 legality rule | action header |
+| `SPLICE_OVERLAP_ILLEGAL` | same-file source range overlaps the anchored target range under the v1 original-snapshot rule | action header |
 | `SPLICE_TARGET_STATE_INVALID` | required target file or range does not exist for the action | target selection block or action header |
 | `SPLICE_WRITE_ERROR` | commit-stage filesystem failure occurs after truthful planning | target path or destination anchor when no stronger authored span exists |
 | `SPLICE_PARTIAL_UNIT_FAILURE` | some connected units committed while others failed | first failing unit plus committed/failed summary |

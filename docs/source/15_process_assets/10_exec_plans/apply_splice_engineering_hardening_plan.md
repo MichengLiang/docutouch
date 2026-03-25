@@ -1,4 +1,4 @@
-# (process-assets-apply-splice-engineering-hardening-plan)=
+(process-assets-apply-splice-engineering-hardening-plan)=
 # Apply Splice Engineering Hardening Plan
 
 ## Purpose

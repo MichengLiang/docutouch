@@ -375,23 +375,33 @@ async fn run_search(command: SearchCommand) -> Result<i32> {
 
 async fn run_patch(command: PatchCommand) -> Result<i32> {
     let cwd = std::env::current_dir()?;
-    let patch_source = transport_source_from_cli_path(&cwd, command.patch_file.as_deref());
-    let patch = read_transport_text(&cwd, command.patch_file.as_deref())?;
-    let adapter = PatchInvocationAdapter::for_cli(cwd, patch_source);
+    let patch_source_path = resolve_transport_source_path(&cwd, command.patch_file.as_deref());
+    let patch_source = transport_source_from_path(patch_source_path.as_deref());
+    let patch = read_transport_text(patch_source_path.as_deref())?;
+    let execution_anchor = infer_patch_execution_anchor(&cwd, patch_source_path.as_deref());
+    let adapter = PatchInvocationAdapter::for_cli_with_anchors(
+        execution_anchor.clone(),
+        Some(execution_anchor),
+        patch_source,
+    );
     emit_text_result(adapter.execute(&patch))
 }
 
 async fn run_splice(command: SpliceCommand) -> Result<i32> {
     let cwd = std::env::current_dir()?;
-    let splice = read_transport_text(&cwd, command.splice_file.as_deref())?;
-    let splice_source = transport_source_from_cli_path(&cwd, command.splice_file.as_deref());
+    let splice_source_path = resolve_transport_source_path(&cwd, command.splice_file.as_deref());
+    let splice = read_transport_text(splice_source_path.as_deref())?;
+    let splice_source = transport_source_from_path(splice_source_path.as_deref());
     let adapter = SpliceInvocationAdapter::for_cli(cwd, splice_source);
     emit_text_result(adapter.execute(&splice))
 }
 
-fn read_transport_text(cwd: &Path, source_file: Option<&str>) -> Result<String> {
-    if let Some(raw_path) = source_file {
-        let path = resolve_cli_path(cwd, raw_path);
+fn resolve_transport_source_path(cwd: &Path, source_file: Option<&str>) -> Option<PathBuf> {
+    source_file.map(|raw_path| resolve_cli_path(cwd, raw_path))
+}
+
+fn read_transport_text(source_path: Option<&Path>) -> Result<String> {
+    if let Some(path) = source_path {
         return Ok(std::fs::read_to_string(path)?);
     }
 
@@ -400,13 +410,28 @@ fn read_transport_text(cwd: &Path, source_file: Option<&str>) -> Result<String> 
     Ok(buffer)
 }
 
-fn transport_source_from_cli_path(
-    cwd: &Path,
-    source_file: Option<&str>,
-) -> TransportSourceProvenance {
-    source_file
-        .map(|raw_path| TransportSourceProvenance::File(resolve_cli_path(cwd, raw_path)))
+fn transport_source_from_path(source_path: Option<&Path>) -> TransportSourceProvenance {
+    source_path
+        .map(|path| TransportSourceProvenance::File(path.to_path_buf()))
         .unwrap_or(TransportSourceProvenance::Inline)
+}
+
+fn infer_patch_execution_anchor(cwd: &Path, patch_source_path: Option<&Path>) -> PathBuf {
+    patch_source_path
+        .and_then(failed_patch_workspace_root)
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+fn failed_patch_workspace_root(path: &Path) -> Option<PathBuf> {
+    let failed_patches_dir = path.parent()?;
+    if failed_patches_dir.file_name().and_then(|name| name.to_str()) != Some("failed-patches") {
+        return None;
+    }
+    let docutouch_dir = failed_patches_dir.parent()?;
+    if docutouch_dir.file_name().and_then(|name| name.to_str()) != Some(".docutouch") {
+        return None;
+    }
+    docutouch_dir.parent().map(Path::to_path_buf)
 }
 
 fn parse_optional_transport_file_arg(
@@ -529,7 +554,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file]\n  {program} patch --patch-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file]\n  {program} patch --patch-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 
@@ -550,8 +575,9 @@ fn write_stderr(message: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_optional_transport_file_arg, parse_patch_command, parse_splice_command,
-        read_transport_text, resolve_cli_path, transport_source_from_cli_path,
+        failed_patch_workspace_root, infer_patch_execution_anchor, parse_optional_transport_file_arg,
+        parse_patch_command, parse_splice_command, read_transport_text, resolve_cli_path,
+        resolve_transport_source_path, transport_source_from_path,
     };
     use crate::transport_shell::TransportSourceProvenance;
     use std::path::Path;
@@ -598,8 +624,9 @@ mod tests {
         let nested = cwd.join("input.patch");
         std::fs::write(&nested, "hello\n").expect("write input");
 
-        let source = transport_source_from_cli_path(cwd, Some("input.patch"));
-        let text = read_transport_text(cwd, Some("input.patch")).expect("read transport text");
+        let source_path = resolve_transport_source_path(cwd, Some("input.patch"));
+        let source = transport_source_from_path(source_path.as_deref());
+        let text = read_transport_text(source_path.as_deref()).expect("read transport text");
 
         match source {
             TransportSourceProvenance::Inline => panic!("expected file provenance"),
@@ -617,9 +644,45 @@ mod tests {
         let source = temp.path().join("input.splice");
         std::fs::write(&source, "splice\n").expect("write source");
 
-        let text =
-            read_transport_text(cwd, Some(source.to_str().expect("utf-8 path"))).expect("read");
+        let source_path =
+            resolve_transport_source_path(cwd, Some(source.to_str().expect("utf-8 path")));
+        let text = read_transport_text(source_path.as_deref()).expect("read");
 
         assert_eq!(text, "splice\n");
+    }
+
+    #[test]
+    fn failed_patch_workspace_root_recovers_docutouch_workspace_parent() {
+        let path = Path::new("workspace")
+            .join(".docutouch")
+            .join("failed-patches")
+            .join("retry.patch");
+
+        assert_eq!(
+            failed_patch_workspace_root(&path),
+            Some(Path::new("workspace").to_path_buf())
+        );
+    }
+
+    #[test]
+    fn failed_patch_workspace_root_ignores_regular_patch_files() {
+        let path = Path::new("workspace").join("patches").join("retry.patch");
+
+        assert_eq!(failed_patch_workspace_root(&path), None);
+    }
+
+    #[test]
+    fn infer_patch_execution_anchor_prefers_failed_patch_workspace_root() {
+        let cwd = Path::new("cwd");
+        let path = Path::new("workspace")
+            .join(".docutouch")
+            .join("failed-patches")
+            .join("retry.patch");
+
+        assert_eq!(
+            infer_patch_execution_anchor(cwd, Some(&path)),
+            Path::new("workspace")
+        );
+        assert_eq!(infer_patch_execution_anchor(cwd, None), cwd);
     }
 }

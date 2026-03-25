@@ -27,51 +27,7 @@ templates_path = ['_templates']
 
 exclude_patterns = ['**/past_records/**', 'build/**']
 
-"""
-如果你的目录结构是这样的：
-
-```
-docs/
-└─ source/
-   ├─ index.rst
-   ├─ 知识工程/
-   │  ├─ intro.rst
-   │  └─ past_records/
-   │      ├─ 旧文档1.rst
-   │      └─ 旧文档2.rst
-```
-
-而你希望在构建时排除掉 `source/知识工程/past_records` 整个目录，那么只需要在 `conf.py` 里加上一行：
-
-```python
-exclude_patterns = ['知识工程/past_records/*']
-```
-
-### ✅ 说明：
-
-* `exclude_patterns` 里的路径是 **相对于 `source` 目录** 的，也就是 Sphinx 的根文档目录。
-* 你可以用通配符：
-
-  * `知识工程/past_records/*` → 排除该文件夹下所有文件。
-  * `知识工程/past_records/**` → 递归排除所有子目录（如果还有层级）。
-  * `**/past_records/**` → 无论在哪个上级目录，只要名字是 `past_records` 都排除。
-
-### 💡例如：
-
-```python
-exclude_patterns = [
-    '知识工程/past_records/**',
-]
-```
-
-这就最稳妥了：
-
-> 会递归排除整个 `past_records` 文件夹（包括子目录和文件），而不会影响 `知识工程` 下的其他内容。
-
-"""
-
-
-language = 'zh_CN'
+language = 'zh'
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

@@ -62,6 +62,11 @@
 - transfer family 由 `Copy/Move × Append/Insert Before/Insert After/Replace` 构成；
 - removal family 目前仅包含 `Delete Span`。
 
+当前 accepted authored default 还包括：
+
+- 当调用者要删除一段既有 contiguous span 且不发生 target-side transfer 时，默认优先使用 `Delete Span`；
+- 尤其在 removal body 较大时，不应为了沿用 patch 心智而把既有删除任务改写成需要重述整段 removed text 的 authored surface。
+
 ## Canonical Authored Shape
 
 接口采用 envelope-shaped、patch-like authored surface，但不复用 patch hunk grammar。
@@ -132,6 +137,13 @@ double-lock validation 的两把锁是：
 
 这些 omission marker 表示 contiguous range 的压缩写法，而不是 sparse sample。
 
+当前 accepted authored default 还包括：
+
+- multi-line selection 默认优先采用 boundary anchors + omission marker 的 compact 形态；
+- 当省略后的 boundary-anchored selection 已足以 truthfully 锁定 intended span 时，不应为“更完整”而枚举中间 numbered lines；
+- 只有当较短写法会产生歧义，或中间全文本本身就是 intended evidence 时，才展开 interior numbered lines；
+- 任一被写出的 numbered line 仍必须保留 full visible content，而不是局部片段。
+
 ## Operational Semantics
 
 接口层面的操作语义如下：
@@ -166,7 +178,8 @@ diagnostics contract 保持与现有 patch tooling 风格一致：
 当前锁定的 interface rules 包括：
 
 - same-file source 与 target selection 均针对 original snapshot 解析；
-- same-file overlap 对 `Insert Before`、`Insert After`、`Replace` 属于非法情况，应返回稳定 overlap-class diagnostic；
+- same-file anchored target action 在 source 与 target ranges 针对该 original snapshot 保持 non-overlapping 时是允许的；
+- 对 `Insert Before`、`Insert After`、`Replace` 而言，same-file overlap 仅在 source range 与 anchored target range 重叠时才属于非法情况，并应返回稳定 overlap-class diagnostic；
 - `Append To File` 可以创建缺失目标文件；
 - `Insert Before In File`、`Insert After In File`、`Replace In File` 要求目标文件与目标 selection 已存在；
 - source text verbatim preserved，包括 newline bytes。

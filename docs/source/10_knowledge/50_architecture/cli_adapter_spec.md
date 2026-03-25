@@ -66,15 +66,36 @@ CLI 与 MCP 之间必须保持同一组核心语义：
 - absence of explicit `set_workspace`
 - path display rooted in current CWD
 
-### 2. CWD As Implicit Anchor
+### 2. CWD As Default Anchor
 
 CLI 不需要显式 `set_workspace` 协议步骤，但 path anchoring 语义并未消失。
 
 accepted contract 是：
 
-- process CWD 成为相对路径的 implicit anchor；
+- process CWD 是 CLI relative path resolution 的 default anchor；
 - absolute path 继续合法；
 - rendered path 仍应优先选择可读的 compact display。
+
+但 default anchor 不是“无条件绑定当前 cwd”的禁止例外规则。
+
+对于 DocuTouch 自身生成、且以 file-backed source 重新进入 CLI 的 repair artifact，
+accepted transport behavior 可以恢复更真实的 execution anchor，前提是：
+
+- source file 的真实路径可被 truthfully 解析；
+- 该路径命中 `<workspace>/.docutouch/failed-patches/*.patch`；
+- 恢复出的 `<workspace>` 能直接来自该 artifact path 本身，而不是额外的 hidden CLI state。
+
+在该分支中：
+
+- execution anchor 应恢复为 artifact 所属的 workspace root；
+- display anchor 应与 execution anchor 保持一致，避免 diagnostics 退化为偶然的 `../..` 相对显示；
+- 这条恢复规则只适用于 DocuTouch-owned failed patch artifact，不应自动推广到任意用户提供的 patch file。
+
+因此，accepted architecture 不是“CLI 拥有 workspace 协议”，而是：
+
+- ordinary CLI invocation 继续以 cwd 为 default anchor；
+- DocuTouch-owned repair artifact 允许恢复其原 workspace anchor；
+- transport-specific convenience 不得改写普通 file-backed patch 的既有 cwd 语义。
 
 ### 3. One-to-One Conceptual Mapping
 
@@ -120,6 +141,12 @@ testing architecture 至少要覆盖两层：
 
 - parity tests：验证 CLI 与 MCP 在代表性场景上的 contract alignment
 - transport-specific tests：验证 CLI invocation、stdin/file patch input、CWD anchoring 等 adapter-specific behavior
+
+其中与 anchor 相关的 representative coverage 至少应包含：
+
+- ordinary file-backed patch 继续绑定调用时 cwd；
+- `.docutouch/failed-patches/*.patch` file-backed retry 可恢复 workspace anchor；
+- recovered-anchor path 仍保留原 patch file 作为 truthful diagnostics source。
 
 但 transport-specific tests 不得掩盖 semantic drift。
 

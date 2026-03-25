@@ -40,7 +40,7 @@
 
 - runtime core that can execute parsed splice actions against concrete file state
 - support for the current action basis at the semantic layer
-- same-file original-snapshot interpretation and overlap rejection for illegal same-file anchored actions
+- same-file original-snapshot interpretation and overlap rejection only when the same-file source range overlaps the anchored target range
 - append-create behavior for missing destination files and failure for missing anchored targets
 - tests that assert resulting filesystem state and raw transferred content behavior
 

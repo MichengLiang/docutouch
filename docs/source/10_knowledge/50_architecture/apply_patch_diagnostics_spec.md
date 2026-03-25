@@ -141,6 +141,15 @@ durable audit 属于 host，不属于 tool-layer diagnostics architecture。
 - 保留 repair-relevant inline accounting；
 - 在原 patch 不是 file-backed 时持久化 failed patch source；
 
+被持久化到 `.docutouch/failed-patches/` 的 failed patch source，
+其 accepted architecture 身份是 repair artifact，而不是第二层 audit cache。
+
+因此当该 artifact 以后续 file-backed source 形式重新进入受支持 transport 时：
+
+- 诊断仍应把该 patch file 视为 truthful source；
+- transport 可以从 artifact 自身路径恢复其所属 workspace anchor；
+- 这条恢复能力的职责是缩短 repair loop，而不是引入额外的 hidden workspace state；
+
 但不应扩张为：
 
 - replay cache subsystem

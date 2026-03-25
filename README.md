@@ -122,14 +122,17 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-ser
 - `docutouch read`
 - `docutouch search`
 - `docutouch patch`
+- `docutouch splice`
 
 CLI 约定：
 
-- relative path 一律以当前进程 CWD 作为隐式 workspace anchor
+- ordinary relative path 默认以当前进程 CWD 作为隐式 workspace anchor
 - absolute path 仍然始终可用
 - `search` 复用 MCP 的 grouped `preview/full` 输出语义
 - `patch` 复用 MCP 的 success / warning / failure diagnostics 语义
 - `patch` 在未提供 patch file 参数时，从 stdin 读取 patch 文本
+- `patch` 若接收到 `.docutouch/failed-patches/*.patch` 形式的 DocuTouch-owned failed patch artifact file，会从该 artifact 路径恢复 workspace anchor
+- `splice` 复用 MCP 的 diagnostics 语义，并在未提供 splice file 参数时，从 stdin 读取 splice 文本
 - 独立的 `apply_patch` 二进制继续保留；`docutouch patch` 是统一工具面的并存 adapter，而不是替代品
 
 示例：
@@ -141,6 +144,8 @@ cargo run -p docutouch-server -- read README.md --line-range 1:120 --sample-step
 cargo run -p docutouch-server -- read README.md --line-range 1:120 --sample-step 5 --sample-lines 2 --max-chars 80
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src docutouch-core/src --view full
 cat fix.patch | cargo run -p docutouch-server -- patch
+cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
+Get-Content move.splice | cargo run -p docutouch-server -- splice
 ```
 
 ## 测试 (Testing)

@@ -27,6 +27,12 @@ cargo run -p docutouch-server -- serve
 DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
 ```
 
+如果你还希望 server process 默认把 `apply_patch` 的 numbered-evidence mode 设为 `full`：
+
+```bash
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server
+```
+
 相对路径的解析优先使用显式 `set_workspace`，其次使用启动时有效的 `DOCUTOUCH_DEFAULT_WORKSPACE`。
 
 ## 最小配置示例
@@ -36,7 +42,8 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-ser
   "command": "cargo",
   "args": ["run", "-q", "-p", "docutouch-server"],
   "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project"
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
   }
 }
 ```

@@ -18,6 +18,8 @@
 - seek / match 行为
 - runtime contract 的刻意分叉面
 
+当前 runtime contract 的刻意分叉面也包括 numbered-evidence mode split：默认 `header_only`，advanced `full` 作为显式开启能力。
+
 ## Packaging Posture
 
 当前本地 crate 以 standalone crate 方式保留，不继承 upstream workspace manifest。

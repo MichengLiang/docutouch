@@ -42,6 +42,10 @@ DocuTouch is a good fit when you need to:
 *** End Patch
 ```
 
+When ordinary context is not unique enough, `apply_patch` also supports one optional numbered anchor such as `@@ 120 | def handler():`.
+
+The default numbered-evidence mode is `header_only`: numbered `@@` headers are interpreted, while body text that happens to look like `121 | value = 1` remains ordinary text by default. An advanced `full` mode exists for denser old-side numbered evidence when a human operator explicitly enables it.
+
 In this repository, the runtime behavior goes beyond a direct upstream carry-over. The most important additions are:
 
 - atomic commit inside connected file groups
@@ -195,7 +199,8 @@ Minimal stdio MCP server config:
   "command": "cargo",
   "args": ["run", "-q", "-p", "docutouch-server"],
   "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project"
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
   }
 }
 ```
@@ -208,6 +213,12 @@ If your host will call `set_workspace` immediately after connecting, `DOCUTOUCH_
 
 ```bash
 cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
+```
+
+If you need dense body-level numbered old-side evidence for one replay, you can enable it per invocation:
+
+```bash
+cargo run -p docutouch-server -- patch --numbered-evidence-mode full retry.patch
 ```
 
 Or replay from stdin after editing the patch text:

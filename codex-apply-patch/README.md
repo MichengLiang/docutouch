@@ -17,6 +17,7 @@
 - 便于继续修复的 diagnostics
 - source-location-aware failure metadata
 - warning blocks for compatibility behavior
+- numbered-evidence mode split: default `header_only`, advanced `full`
 
 ## 相关文档
 

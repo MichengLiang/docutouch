@@ -21,6 +21,10 @@
 *** End Patch
 ```
 
+如果普通 context 还不够唯一，`apply_patch` 允许额外加一个可选的 numbered anchor，例如 `@@ 120 | def handler():`。
+
+默认 mode 是 `header_only`：只解释 numbered `@@` header。只有在人工通过环境变量或 CLI 显式打开 `full` mode 时，body-level 的 dense numbered old-side evidence 才会进入解释路径。
+
 如果 patch 里只有一组失败，common path 仍然保持紧凑；如果 patch 部分落盘，failure surface 会把 committed changes、failed file groups 和 attempted changes 都保留下来。
 
 适合用 `apply_patch` 的任务包括：

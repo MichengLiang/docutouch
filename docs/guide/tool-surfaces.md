@@ -2,7 +2,7 @@
 
 ## `apply_patch`
 
-`apply_patch` 是当前工作区里的核心结构化写入工具。它接受 patch-shaped 输入，runtime 会把相关文件操作按 connected file groups 组织，并在彼此独立的 groups 之间允许 `PartialSuccess`。输出保留 `A/M/D` summary、warning block、committed changes、failed file groups 与 attempted changes，目标是缩短失败后的 repair loop。
+`apply_patch` 是当前工作区里的核心结构化写入工具。它接受 patch-shaped 输入，runtime 会把相关文件操作按 connected file groups 组织，并在彼此独立的 groups 之间允许 `PartialSuccess`。输出保留 `A/M/D` summary、warning block、committed changes、failed file groups 与 attempted changes，目标是缩短失败后的 repair loop。需要消歧时可以可选地使用 `@@ N | visible text`；默认 mode 只解释 numbered header，不默认上浮 body-level dense numbering。
 
 ## `apply_splice`
 

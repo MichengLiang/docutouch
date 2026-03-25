@@ -23,6 +23,12 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 - 直接从 stdin 读取输入文本
 - 显式传入 patch / splice file
 
+`patch` 还支持：
+
+- `--numbered-evidence-mode header_only|full`
+
+默认是 `header_only`。如果一次性重放需要 dense body-level numbered old-side evidence，可以显式传 `full`。
+
 这让 CLI 可以承担一条直接的 repair loop：
 
 1. patch 失败

@@ -7,7 +7,7 @@ DocuTouch 是一组面向 LLM coding agents 的结构化文件工具。
 - `apply_patch`
 - `apply_splice`
 
-`apply_patch` 负责 patch-shaped 结构化写入。它沿用 upstream `apply-patch` 的输入形态，同时把 partial success、connected file groups、warning block、便于继续修复的 diagnostics 和 file-backed repair loop 带进当前 runtime。
+`apply_patch` 负责 patch-shaped 结构化写入。它沿用 upstream `apply-patch` 的输入形态，同时把 partial success、connected file groups、warning block、便于继续修复的 diagnostics 和 file-backed repair loop 带进当前 runtime。普通 context 不够唯一时，还可以可选地使用 `@@ N | visible text` 作为 numbered assist；默认 mode 只解释这种 numbered header。
 
 `apply_splice` 负责既有文本跨度的复制、移动、删除和替换。它独立处理既有片段之间的结构关系，不 author 新文本。
 

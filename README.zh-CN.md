@@ -42,6 +42,10 @@ DocuTouch 适合下面这类工作：
 *** End Patch
 ```
 
+如果普通上下文还不够唯一，`apply_patch` 还支持一个可选的 numbered anchor，例如 `@@ 120 | def handler():`。
+
+默认的 numbered-evidence mode 是 `header_only`：numbered `@@` header 会被解释，而正文里恰好长成 `121 | value = 1` 的文本默认仍按普通文本处理。只有在人工显式开启 advanced `full` mode 时，body-level 的 dense numbered old-side evidence 才会进入解释路径。
+
 当前工作区里的 runtime 在 upstream `apply-patch` baseline 之上增加了下面这些对象：
 
 - connected file groups 的原子提交
@@ -195,7 +199,8 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
   "command": "cargo",
   "args": ["run", "-q", "-p", "docutouch-server"],
   "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project"
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
   }
 }
 ```
@@ -208,6 +213,12 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 
 ```bash
 cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
+```
+
+如果某次重放确实需要 dense body-level numbered old-side evidence，可以在单次调用上显式打开：
+
+```bash
+cargo run -p docutouch-server -- patch --numbered-evidence-mode full retry.patch
 ```
 
 或者在编辑 patch 文本后从 stdin 重放：

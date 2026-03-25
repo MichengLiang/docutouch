@@ -33,3 +33,16 @@
 - EOF without trailing newline
 - CRLF preservation
 - no-op update accounting
+
+## 5. Numbered-Evidence Mode Split
+
+当前本地 fork 额外引入了 numbered-evidence mode split：
+
+- default `header_only`
+- advanced `full`
+
+这意味着：
+
+- numbered `@@` header 默认可用
+- body-level dense numbered old-side evidence 默认不解释
+- body-level dense numbering 只有在显式开启 `full` mode 时才进入 runtime 解释

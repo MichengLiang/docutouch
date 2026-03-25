@@ -12,6 +12,7 @@ DocuTouch 当前相对 upstream 的主要差异集中在运行时对象层。最
 - 执行结果支持 `PartialSuccess`
 - 失败对象带有更完整的 diagnostics metadata
 - parser / diagnostics 层保留了更细的 source-location-aware 信息
+- `apply_patch` 的 numbered-evidence mode 现在分成默认 `header_only` 与显式开启的 `full`
 
 这条 lineage 也不能被简化成“尽量保持靠近上游”。当前 accepted posture 更接近下面这组事实：
 

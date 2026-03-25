@@ -34,6 +34,12 @@ cargo run -p docutouch-server -- serve
 DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
 ```
 
+如果你希望 server process 默认把 `apply_patch` 的 numbered-evidence mode 设为 `full`，可以再加：
+
+```bash
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server
+```
+
 ## 最小 MCP 配置示例
 
 ```json
@@ -58,6 +64,12 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 
 ```bash
 cat fix.patch | cargo run -p docutouch-server -- patch
+```
+
+如果某次 CLI 重放需要单次打开 dense numbered old-side evidence：
+
+```bash
+cargo run -p docutouch-server -- patch --numbered-evidence-mode full retry.patch
 ```
 
 如果 patch 失败并已经被持久化到 `.docutouch/failed-patches/*.patch`，可以直接编辑后重放。

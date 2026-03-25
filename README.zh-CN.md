@@ -2,8 +2,8 @@
 
 语言版本：
 
-- English: `README.md`
-- 简体中文: `README.zh-CN.md`
+- [English](README.md)
+- [简体中文](README.zh-CN.md)
 
 DocuTouch 是一组面向 LLM coding agents 的结构化文件工具。
 

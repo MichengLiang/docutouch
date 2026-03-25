@@ -25,7 +25,7 @@ extensions = ['sphinx.ext.mathjax',
 
 templates_path = ['_templates']
 
-exclude_patterns = ['**/past_records/**', 'build/**']
+exclude_patterns = ['**/past_records/**', 'build/**', 'README.md']
 
 language = 'zh'
 

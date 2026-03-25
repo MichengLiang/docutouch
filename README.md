@@ -2,8 +2,8 @@
 
 Language:
 
-- English: `README.md`
-- 简体中文: `README.zh-CN.md`
+- [English](README.md)
+- [简体中文](README.zh-CN.md)
 
 DocuTouch is a set of structural file tools for coding-agent workflows.
 

@@ -1,6 +1,6 @@
-# @michengliang/docutouch
+# docutouch
 
-`@michengliang/docutouch` is a thin npm launcher for the `docutouch` binary.
+`docutouch` is a thin npm launcher for the `docutouch` binary.
 
 It is not the primary product surface. The package downloads the matching GitHub Release binary for your platform on first run and then executes it.
 
@@ -16,19 +16,19 @@ Other platforms fail with a clear error message.
 Run without a global install:
 
 ```bash
-npx @michengliang/docutouch --help
+npx docutouch --help
 ```
 
 To start the stdio MCP server explicitly:
 
 ```bash
-npx @michengliang/docutouch serve
+npx docutouch serve
 ```
 
 Or install globally:
 
 ```bash
-npm install -g @michengliang/docutouch
+npm install -g docutouch
 docutouch --help
 ```
 

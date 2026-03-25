@@ -23,7 +23,7 @@ cargo run -p docutouch-server
 如果你使用 npm launcher，也可以：
 
 ```bash
-npx @michengliang/docutouch serve
+npx docutouch serve
 ```
 
 ## 默认 workspace
@@ -60,7 +60,7 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 ```json
 {
   "command": "npx",
-  "args": ["-y", "@michengliang/docutouch"],
+  "args": ["-y", "docutouch"],
   "env": {
     "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
     "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"

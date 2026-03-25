@@ -19,7 +19,7 @@ cargo build
 如果你不想从源码构建，也可以直接使用：
 
 - GitHub Releases: `https://github.com/MichengLiang/docutouch/releases`
-- npm launcher: `npx @michengliang/docutouch --help`
+- npm launcher: `npx docutouch --help`
 
 如果当前 tag 已经有 GitHub Release，你也可以直接下载对应平台的 release binary，而不是先从 source build 开始。
 
@@ -66,7 +66,7 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 ```json
 {
   "command": "npx",
-  "args": ["-y", "@michengliang/docutouch"],
+  "args": ["-y", "docutouch"],
   "env": {
     "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
     "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
@@ -84,10 +84,10 @@ cargo run -p docutouch-server -- read README.md --line-range 1:40
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 ```
 
-当 scoped npm wrapper `@michengliang/docutouch` 首次发布后，也可以用：
+当 npm wrapper `docutouch` 首次发布后，也可以用：
 
 ```bash
-npx @michengliang/docutouch
+npx docutouch
 ```
 
 ## 一个最短的 patch 调用

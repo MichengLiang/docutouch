@@ -1,5 +1,5 @@
 {
-  "name": "@michengliang/docutouch",
+  "name": "docutouch",
   "version": "0.1.0",
   "description": "Thin npm launcher for the DocuTouch CLI and MCP server binary",
   "license": "Apache-2.0",

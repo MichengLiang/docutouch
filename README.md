@@ -177,7 +177,7 @@ Release binaries are intended to ship as:
 The repository is also prepared for a scoped npm wrapper package:
 
 ```text
-@michengliang/docutouch
+docutouch
 ```
 
 The repo-side npm trusted-publishing workflow can be committed here, but npm still requires the package-side trusted publisher binding to be completed in npm package settings before fully automated publishing will succeed.
@@ -248,8 +248,8 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 Once the scoped npm wrapper is published, the intended Node-side entry points are:
 
 ```bash
-npx @michengliang/docutouch --help
-npm install -g @michengliang/docutouch
+npx docutouch --help
+npm install -g docutouch
 ```
 
 The npm wrapper is designed as a thin launcher over GitHub Release binaries rather than a second implementation of the tool.

@@ -177,7 +177,7 @@ release 资产的目标形态是：
 仓库侧也已经可以为下面这个 scoped npm wrapper 准备发布：
 
 ```text
-@michengliang/docutouch
+docutouch
 ```
 
 但需要区分两层：repo 里可以准备好 npm trusted-publishing workflow，而 npm 网站侧仍然需要为这个包完成 trusted publisher 绑定后，自动发布才会真正成功。
@@ -248,8 +248,8 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 当 scoped npm wrapper 发布后，Node 侧的目标入口会是：
 
 ```bash
-npx @michengliang/docutouch --help
-npm install -g @michengliang/docutouch
+npx docutouch --help
+npm install -g docutouch
 ```
 
 这个 npm 包只是一个薄 launcher，会去调用 GitHub Release 的二进制，而不是再做第二份实现。

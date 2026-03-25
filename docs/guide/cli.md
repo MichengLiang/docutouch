@@ -5,7 +5,7 @@
 如果你不从源码构建，也可以通过 npm launcher 获取同一个 CLI 入口：
 
 ```bash
-npx @michengliang/docutouch
+npx docutouch
 ```
 
 它当前提供的子命令是：
@@ -35,7 +35,7 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 
 默认是 `header_only`。如果一次性重放需要 dense body-level numbered old-side evidence，可以显式传 `full`。
 
-如果后续发布了 scoped npm wrapper `@michengliang/docutouch`，CLI 的目标入口也可以通过 `npx @michengliang/docutouch` 获得；其本质仍然是调用同一个 `docutouch` 二进制。
+如果后续发布了 npm wrapper `docutouch`，CLI 的目标入口也可以通过 `npx docutouch` 获得；其本质仍然是调用同一个 `docutouch` 二进制。
 
 这让 CLI 可以承担一条直接的 repair loop：
 

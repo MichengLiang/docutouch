@@ -92,6 +92,9 @@ status 应明确表达相关 gate 是否仍未闭合，
 * - `apply_splice_engineering_hardening_status.md`
   - Actual record object
   - 记录 `apply_splice` engineering hardening wave 的执行状态与 closeout
+* - `apply_patch_line_number_assist_rollout_status.md`
+  - Actual record object
+  - 记录 `apply_patch` line-number-assisted locking rollout 的执行状态与 closeout
 ```
 
 ## 页面目录
@@ -111,4 +114,5 @@ diagnostics_polish_execution_wave_20260323
 apply_splice_closure_status
 apply_splice_implementation_status
 apply_splice_engineering_hardening_status
+apply_patch_line_number_assist_rollout_status
 ```

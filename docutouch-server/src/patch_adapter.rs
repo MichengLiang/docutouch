@@ -3,12 +3,42 @@ use docutouch_core::{
     PatchPresentationContext, apply_patch_program_with_source, format_patch_outcome,
 };
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 pub(crate) type PatchSourceProvenance = TransportSourceProvenance;
+
+pub(crate) const APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV: &str =
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PatchNumberedEvidenceMode {
+    HeaderOnly,
+    Full,
+}
+
+impl PatchNumberedEvidenceMode {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "header_only" => Ok(Self::HeaderOnly),
+            "full" => Ok(Self::Full),
+            _ => Err(format!(
+                "--numbered-evidence-mode must be `header_only` or `full`, got `{value}`"
+            )),
+        }
+    }
+
+    fn as_env_value(self) -> &'static str {
+        match self {
+            Self::HeaderOnly => "header_only",
+            Self::Full => "full",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct PatchInvocationAdapter {
     transport: TransportInvocation,
+    numbered_evidence_mode_override: Option<PatchNumberedEvidenceMode>,
 }
 
 impl PatchInvocationAdapter {
@@ -16,6 +46,7 @@ impl PatchInvocationAdapter {
         execution_anchor_dir: PathBuf,
         display_anchor_dir: Option<PathBuf>,
         patch_source: PatchSourceProvenance,
+        numbered_evidence_mode_override: Option<PatchNumberedEvidenceMode>,
     ) -> Self {
         Self {
             transport: TransportInvocation::with_anchors(
@@ -23,12 +54,14 @@ impl PatchInvocationAdapter {
                 display_anchor_dir,
                 patch_source,
             ),
+            numbered_evidence_mode_override,
         }
     }
 
     pub(crate) fn for_workspace(workspace: PathBuf, patch_source: PatchSourceProvenance) -> Self {
         Self {
             transport: TransportInvocation::for_workspace(workspace, patch_source),
+            numbered_evidence_mode_override: None,
         }
     }
 
@@ -38,21 +71,25 @@ impl PatchInvocationAdapter {
     ) -> Self {
         Self {
             transport: TransportInvocation::for_execution_only(anchor_dir, patch_source),
+            numbered_evidence_mode_override: None,
         }
     }
 
     pub(crate) fn unanchored(patch_source: PatchSourceProvenance) -> Self {
         Self {
             transport: TransportInvocation::unanchored(patch_source),
+            numbered_evidence_mode_override: None,
         }
     }
 
     pub(crate) fn execute(&self, patch: &str) -> Result<String, String> {
-        let outcome = apply_patch_program_with_source(
-            patch,
-            self.transport.execution_anchor_dir(),
-            self.transport.source_hint(),
-        );
+        let outcome = with_patch_mode_override(self.numbered_evidence_mode_override, || {
+            apply_patch_program_with_source(
+                patch,
+                self.transport.execution_anchor_dir(),
+                self.transport.source_hint(),
+            )
+        });
         format_patch_outcome(
             patch,
             &PatchPresentationContext {
@@ -67,9 +104,47 @@ impl PatchInvocationAdapter {
     }
 }
 
+fn patch_mode_env_guard() -> &'static Mutex<()> {
+    static GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+    GUARD.get_or_init(|| Mutex::new(()))
+}
+
+fn with_patch_mode_override<T>(
+    mode_override: Option<PatchNumberedEvidenceMode>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let Some(mode_override) = mode_override else {
+        return body();
+    };
+    let _guard = patch_mode_env_guard()
+        .lock()
+        .expect("patch mode env mutex poisoned");
+    let previous = std::env::var_os(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV);
+    unsafe {
+        std::env::set_var(
+            APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV,
+            mode_override.as_env_value(),
+        );
+    }
+    let result = body();
+    match previous {
+        Some(value) => unsafe {
+            std::env::set_var(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, value);
+        },
+        None => unsafe {
+            std::env::remove_var(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV);
+        },
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PatchInvocationAdapter, PatchSourceProvenance};
+    use super::{
+        APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, PatchInvocationAdapter,
+        PatchNumberedEvidenceMode, PatchSourceProvenance, with_patch_mode_override,
+    };
+    use std::ffi::OsString;
 
     #[test]
     fn explicit_patch_file_source_is_preserved_in_failure_output() {
@@ -92,6 +167,7 @@ mod tests {
             temp.path().to_path_buf(),
             Some(temp.path().to_path_buf()),
             PatchSourceProvenance::File(patch_path),
+            None,
         );
         let error = adapter.execute(patch).expect_err("patch should fail");
 
@@ -128,6 +204,7 @@ mod tests {
             temp.path().to_path_buf(),
             Some(temp.path().to_path_buf()),
             PatchSourceProvenance::File(patch_path),
+            None,
         );
         let error = adapter.execute(patch).expect_err("patch should fail");
 
@@ -165,5 +242,35 @@ mod tests {
             "new\n"
         );
         assert!(message.contains(&normalized_target), "{message}");
+    }
+
+    #[test]
+    fn scoped_patch_mode_override_restores_previous_environment() {
+        let previous = std::env::var_os(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV);
+        unsafe {
+            std::env::set_var(
+                APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV,
+                PatchNumberedEvidenceMode::HeaderOnly.as_env_value(),
+            );
+        }
+
+        let seen = with_patch_mode_override(Some(PatchNumberedEvidenceMode::Full), || {
+            std::env::var_os(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV)
+        });
+
+        assert_eq!(seen, Some(OsString::from("full")));
+        assert_eq!(
+            std::env::var_os(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV),
+            Some(OsString::from("header_only"))
+        );
+
+        match previous {
+            Some(value) => unsafe {
+                std::env::set_var(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, value);
+            },
+            None => unsafe {
+                std::env::remove_var(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV);
+            },
+        }
     }
 }

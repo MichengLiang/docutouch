@@ -1,4 +1,4 @@
-use crate::patch_adapter::PatchInvocationAdapter;
+use crate::patch_adapter::{PatchInvocationAdapter, PatchNumberedEvidenceMode};
 use crate::splice_adapter::SpliceInvocationAdapter;
 use crate::transport_shell::TransportSourceProvenance;
 use anyhow::Result;
@@ -48,8 +48,10 @@ struct SearchCommand {
     view: SearchTextView,
 }
 
+#[derive(Debug)]
 struct PatchCommand {
     patch_file: Option<String>,
+    numbered_evidence_mode: Option<PatchNumberedEvidenceMode>,
 }
 
 struct SpliceCommand {
@@ -275,8 +277,37 @@ fn parse_search_command(args: &[String]) -> Result<SearchCommand, String> {
 }
 
 fn parse_patch_command(args: &[String]) -> Result<PatchCommand, String> {
+    let mut patch_file = None;
+    let mut numbered_evidence_mode = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = arg.strip_prefix("--patch-file=") {
+            patch_file = Some(value.to_string());
+        } else if arg == "--patch-file" {
+            index += 1;
+            patch_file = Some(value_at(args, index, "--patch-file")?.to_string());
+        } else if let Some(value) = arg.strip_prefix("--numbered-evidence-mode=") {
+            numbered_evidence_mode = Some(PatchNumberedEvidenceMode::parse(value)?);
+        } else if arg == "--numbered-evidence-mode" {
+            index += 1;
+            numbered_evidence_mode = Some(PatchNumberedEvidenceMode::parse(value_at(
+                args,
+                index,
+                "--numbered-evidence-mode",
+            )?)?);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown patch flag: {arg}"));
+        } else if patch_file.is_none() {
+            patch_file = Some(arg.clone());
+        } else {
+            return Err("patch accepts at most one patch file argument".to_string());
+        }
+        index += 1;
+    }
     Ok(PatchCommand {
-        patch_file: parse_optional_transport_file_arg(args, "patch", "--patch-file", "patch file")?,
+        patch_file,
+        numbered_evidence_mode,
     })
 }
 
@@ -383,6 +414,7 @@ async fn run_patch(command: PatchCommand) -> Result<i32> {
         execution_anchor.clone(),
         Some(execution_anchor),
         patch_source,
+        command.numbered_evidence_mode,
     );
     emit_text_result(adapter.execute(&patch))
 }
@@ -554,7 +586,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file]\n  {program} patch --patch-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 
@@ -579,6 +611,7 @@ mod tests {
         parse_patch_command, parse_splice_command, read_transport_text, resolve_cli_path,
         resolve_transport_source_path, transport_source_from_path,
     };
+    use crate::patch_adapter::PatchNumberedEvidenceMode;
     use crate::transport_shell::TransportSourceProvenance;
     use std::path::Path;
 
@@ -590,7 +623,30 @@ mod tests {
             .expect("splice parse should succeed");
 
         assert_eq!(patch.patch_file.as_deref(), Some("input.patch"));
+        assert_eq!(patch.numbered_evidence_mode, None);
         assert_eq!(splice.splice_file.as_deref(), Some("input.splice"));
+    }
+
+    #[test]
+    fn patch_command_accepts_numbered_evidence_mode_flag() {
+        let patch = parse_patch_command(&[
+            "input.patch".to_string(),
+            "--numbered-evidence-mode=full".to_string(),
+        ])
+        .expect("patch parse should succeed");
+
+        assert_eq!(patch.patch_file.as_deref(), Some("input.patch"));
+        assert_eq!(patch.numbered_evidence_mode, Some(PatchNumberedEvidenceMode::Full));
+    }
+
+    #[test]
+    fn patch_command_rejects_unknown_numbered_evidence_mode() {
+        let error = parse_patch_command(&["--numbered-evidence-mode=weird".to_string()])
+            .expect_err("patch parse should fail");
+        assert_eq!(
+            error,
+            "--numbered-evidence-mode must be `header_only` or `full`, got `weird`"
+        );
     }
 
     #[test]

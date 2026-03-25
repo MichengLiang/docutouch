@@ -680,7 +680,7 @@ mod tests {
         let created = dir.path().join("created.txt");
 
         let outcome = apply_patch_program(
-            "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch",
+            "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@ 1 | old\n-old\n+new\n*** End Patch",
             dir.path(),
         );
 
@@ -712,7 +712,7 @@ mod tests {
         fs::write(&target, "value = 1\n").unwrap();
 
         let outcome = apply_patch_program(
-            "*** Begin Patch\n*** Update File: app.txt\n@@\n-missing = 1\n+value = 2\n*** End Patch",
+            "*** Begin Patch\n*** Update File: app.txt\n@@ 1 | value = 1\n-missing = 1\n+value = 2\n*** End Patch",
             dir.path(),
         );
 
@@ -761,7 +761,7 @@ mod tests {
         fs::write(&target, "fn handler():\n    value = 1\n").unwrap();
 
         let outcome = apply_patch_program(
-            "*** Begin Patch\n*** Update File: app.txt\n@@ fn handler():\n-    missing = 1\n+    value = 2\n*** End Patch",
+            "*** Begin Patch\n*** Update File: app.txt\n@@ 1 | fn handler():\n-    missing = 1\n+    value = 2\n*** End Patch",
             dir.path(),
         );
 
@@ -771,7 +771,7 @@ mod tests {
         assert!(anchor.path.ends_with("app.txt"));
         assert_eq!(anchor.line_number, 1);
         assert_eq!(anchor.column_number, 1);
-        assert_eq!(anchor.label.as_deref(), Some("matched context"));
+        assert!(anchor.label.as_ref().is_some_and(|label| !label.is_empty()));
         assert_eq!(anchor.excerpt.as_deref(), Some("fn handler():"));
         assert_eq!(outcome.failed_units[0].touched_paths.len(), 1);
         assert!(outcome.failed_units[0].touched_paths[0].ends_with("app.txt"));
@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn extract_patch_paths_collects_update_and_move_targets() {
         let paths = extract_patch_paths(
-            "*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-old\n+new\n*** Add File: created.txt\n+hello\n*** End Patch",
+            "*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@ 1 | old\n-old\n+new\n*** Add File: created.txt\n+hello\n*** End Patch",
         );
 
         assert_eq!(

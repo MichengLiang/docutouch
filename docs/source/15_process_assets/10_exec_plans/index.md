@@ -89,6 +89,9 @@
 * - `apply_patch_semantics_hardening_plan.md`
   - Process asset page
   - `apply_patch` semantics / compatibility hardening 的 canonical plan host
+* - `apply_patch_line_number_assist_rollout_plan.md`
+  - Process asset page
+  - `apply_patch` line-number-assisted locking rollout 的 canonical host
 ```
 
 ## 页面目录
@@ -108,4 +111,5 @@ engineering_quality_wave_20260323_plan
 apply_splice_engineering_hardening_plan
 apply_splice_implementation_schedule_plan
 apply_patch_semantics_hardening_plan
+apply_patch_line_number_assist_rollout_plan
 ```

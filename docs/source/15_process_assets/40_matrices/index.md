@@ -61,6 +61,9 @@
 * - `apply_splice_implementation_stream_matrix.md`
   - Process asset page
   - `apply_splice` 第一批 implementation streams 的关系矩阵
+* - `apply_patch_line_number_assist_implementation_stream_matrix.md`
+  - Process asset page
+  - `apply_patch` line-number-assisted locking rollout 的 implementation streams 关系矩阵
 ```
 
 ## 页面目录
@@ -72,4 +75,5 @@ authoring_contract
 matrix_surface_grammar
 matrix_minimal_example
 apply_splice_implementation_stream_matrix
+apply_patch_line_number_assist_implementation_stream_matrix
 ```

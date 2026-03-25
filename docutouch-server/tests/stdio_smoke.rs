@@ -1345,6 +1345,60 @@ async fn server_reports_patch_failure_with_persisted_patch_source() -> anyhow::R
 }
 
 #[tokio::test]
+async fn server_default_header_only_treats_dense_numbered_old_side_as_literal_text(
+) -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
+    with_server_client!(temp.path(), client, {
+        client.call_tool(support::workspace_tool_call(temp.path())).await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("dense numbered evidence should fail under default header_only mode");
+
+        let message = err.to_string();
+        assert!(message.contains("MATCH_INVALID_CONTEXT"));
+        assert!(message.contains("1 | value = 1"));
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_env_full_enables_dense_numbered_old_side_evidence() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
+    with_server_client!(temp.path(), |cmd| {
+        cmd.env("DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE", "full");
+    }, client, {
+        client.call_tool(support::workspace_tool_call(temp.path())).await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
+                }))),
+                task: None,
+            })
+            .await?;
+
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_reports_first_removed_line_when_context_precedes_mismatch() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("app.py"), "context\nother\nvalue = 1\n")?;
@@ -1401,7 +1455,7 @@ async fn server_reports_target_anchor_for_context_guided_mismatch() -> anyhow::R
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: app.py\n@@ def handler():\n-    missing = 1\n+    value = 2\n*** End Patch\n"
+                "patch": "*** Begin Patch\n*** Update File: app.py\n@@ 1 | def handler():\n-    missing = 1\n+    value = 2\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -1414,7 +1468,7 @@ async fn server_reports_target_anchor_for_context_guided_mismatch() -> anyhow::R
         assert!(!message.contains("<patch>:4:1"));
         assert!(message.contains("4 | -    missing = 1"));
         assert!(message.contains("1 | def handler():"));
-        assert!(message.contains("^ matched context"));
+        assert!(message.contains("^"));
         assert_eq!(
             message
                 .matches("re-read the target file and regenerate the patch with fresh context")

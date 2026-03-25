@@ -45,6 +45,37 @@ pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_too
 /// dispatcher.
 pub const CODEX_CORE_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
 
+/// Environment variable that controls how numbered old-side evidence is interpreted.
+pub const APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV: &str =
+    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumberedEvidenceMode {
+    HeaderOnly,
+    Full,
+}
+
+impl std::str::FromStr for NumberedEvidenceMode {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "header_only" | "header-only" => Ok(Self::HeaderOnly),
+            "full" => Ok(Self::Full),
+            other => Err(format!(
+                "unknown numbered-evidence mode `{other}`; expected `header_only` or `full`"
+            )),
+        }
+    }
+}
+
+pub fn numbered_evidence_mode_from_env() -> NumberedEvidenceMode {
+    std::env::var(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(NumberedEvidenceMode::HeaderOnly)
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
@@ -284,7 +315,8 @@ pub fn apply_patch(
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
     let cwd = std::env::current_dir().map_err(ApplyPatchError::from)?;
-    let report = match apply_patch_in_dir(patch, &cwd) {
+    let report = match apply_patch_in_dir_with_mode(patch, &cwd, numbered_evidence_mode_from_env())
+    {
         Ok(report) => report,
         Err(e) => {
             match &e {
@@ -349,8 +381,16 @@ pub fn apply_patch(
 }
 
 pub fn apply_patch_in_dir(patch: &str, cwd: &Path) -> Result<ApplyPatchReport, ApplyPatchError> {
+    apply_patch_in_dir_with_mode(patch, cwd, numbered_evidence_mode_from_env())
+}
+
+pub fn apply_patch_in_dir_with_mode(
+    patch: &str,
+    cwd: &Path,
+    mode: NumberedEvidenceMode,
+) -> Result<ApplyPatchReport, ApplyPatchError> {
     let (parsed, source_map) = parse_patch_with_source_map(patch)?;
-    apply_hunks_in_dir(&parsed.hunks, cwd, Some(&source_map))
+    apply_hunks_in_dir_with_mode(&parsed.hunks, cwd, Some(&source_map), mode)
 }
 
 /// Applies hunks and continues to update stdout/stderr
@@ -360,7 +400,7 @@ pub fn apply_hunks(
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
     let cwd = std::env::current_dir().map_err(ApplyPatchError::from)?;
-    match apply_hunks_in_dir(hunks, &cwd, None)? {
+    match apply_hunks_in_dir_with_mode(hunks, &cwd, None, numbered_evidence_mode_from_env())? {
         ApplyPatchReport {
             status: ApplyPatchStatus::FullSuccess,
             affected,
@@ -407,7 +447,8 @@ pub fn apply_hunks(
 #[allow(dead_code)]
 fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
     let cwd = std::env::current_dir()?;
-    let report = apply_hunks_in_dir(hunks, &cwd, None).map_err(anyhow::Error::from)?;
+    let report = apply_hunks_in_dir_with_mode(hunks, &cwd, None, numbered_evidence_mode_from_env())
+        .map_err(anyhow::Error::from)?;
     match report.status {
         ApplyPatchStatus::FullSuccess => Ok(report.affected),
         ApplyPatchStatus::PartialSuccess | ApplyPatchStatus::Failure => {
@@ -480,10 +521,11 @@ struct PlannedUnit {
     path_diagnostics: HashMap<PathIdentityKey, PathDiagnosticRef>,
 }
 
-fn apply_hunks_in_dir(
+fn apply_hunks_in_dir_with_mode(
     hunks: &[Hunk],
     cwd: &Path,
     source_map: Option<&PatchSourceMap>,
+    mode: NumberedEvidenceMode,
 ) -> Result<ApplyPatchReport, ApplyPatchError> {
     if hunks.is_empty() {
         return Ok(ApplyPatchReport {
@@ -504,7 +546,7 @@ fn apply_hunks_in_dir(
 
     for unit in units {
         let attempted = intended_affected_paths(&unit);
-        match plan_commit_unit(&unit) {
+        match plan_commit_unit(&unit, mode) {
             Ok(plan) => match commit_unit_atomically(&plan) {
                 Ok(group_affected) => {
                     extend_affected_paths(&mut affected, group_affected);
@@ -680,7 +722,10 @@ fn build_commit_units(hunks: &[ResolvedHunk]) -> Vec<CommitUnit> {
     .collect()
 }
 
-fn plan_commit_unit(unit: &CommitUnit) -> Result<PlannedUnit, UnitFailure> {
+fn plan_commit_unit(
+    unit: &CommitUnit,
+    mode: NumberedEvidenceMode,
+) -> Result<PlannedUnit, UnitFailure> {
     let mut before: StagedPathMap = HashMap::new();
     let mut working: StagedPathMap = HashMap::new();
     let mut move_pairs: Vec<(PathIdentityKey, PathIdentityKey, PathBuf)> = Vec::new();
@@ -797,6 +842,7 @@ fn plan_commit_unit(unit: &CommitUnit) -> Result<PlannedUnit, UnitFailure> {
                     &current,
                     &path.actual_path,
                     chunks,
+                    mode,
                 )
                 .map_err(|err| {
                     unit_failure_for_match_error(
@@ -1212,12 +1258,379 @@ struct ReplaceMatchError {
     blame_first_old_line: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NumberedOldSideEvidence {
+    line_number: usize,
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedChunkLine {
+    raw: String,
+    visible: String,
+    numbered: Option<NumberedOldSideEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PreparedChunkLines {
+    old_lines: Vec<ParsedChunkLine>,
+    new_lines: Vec<String>,
+}
+
+fn parse_numbered_old_side_evidence(line: &str) -> Option<NumberedOldSideEvidence> {
+    let (line_number, text) = line.split_once(" | ")?;
+    if line_number.is_empty()
+        || (line_number.len() > 1 && line_number.starts_with('0'))
+        || !line_number.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    let line_number = line_number.parse::<usize>().ok()?;
+    if line_number == 0 {
+        return None;
+    }
+    Some(NumberedOldSideEvidence {
+        line_number,
+        text: text.to_string(),
+    })
+}
+
+fn parse_chunk_line(line: &str, mode: NumberedEvidenceMode) -> ParsedChunkLine {
+    let numbered = match mode {
+        NumberedEvidenceMode::HeaderOnly => None,
+        NumberedEvidenceMode::Full => parse_numbered_old_side_evidence(line),
+    };
+    let visible = numbered
+        .as_ref()
+        .map(|evidence| evidence.text.clone())
+        .unwrap_or_else(|| line.to_string());
+    ParsedChunkLine {
+        raw: line.to_string(),
+        visible,
+        numbered,
+    }
+}
+
+fn chunk_lines_are_context_equivalent(old: &ParsedChunkLine, new: &ParsedChunkLine) -> bool {
+    old.raw == new.raw
+        || (old.numbered.is_some() && new.numbered.is_none() && old.visible == new.visible)
+}
+
+fn prepare_chunk_lines(
+    chunk: &UpdateFileChunk,
+    mode: NumberedEvidenceMode,
+) -> Result<PreparedChunkLines, String> {
+    let old_lines = chunk
+        .old_lines
+        .iter()
+        .map(|line| parse_chunk_line(line, mode))
+        .collect::<Vec<_>>();
+    let new_lines = chunk
+        .new_lines
+        .iter()
+        .map(|line| parse_chunk_line(line, mode))
+        .collect::<Vec<_>>();
+
+    let old_len = old_lines.len();
+    let new_len = new_lines.len();
+    let mut lcs = vec![vec![0usize; new_len + 1]; old_len + 1];
+    for old_index in (0..old_len).rev() {
+        for new_index in (0..new_len).rev() {
+            lcs[old_index][new_index] = if chunk_lines_are_context_equivalent(
+                &old_lines[old_index],
+                &new_lines[new_index],
+            ) {
+                lcs[old_index + 1][new_index + 1] + 1
+            } else {
+                lcs[old_index + 1][new_index].max(lcs[old_index][new_index + 1])
+            };
+        }
+    }
+
+    let mut sanitized_new_lines = new_lines
+        .iter()
+        .map(|line| line.raw.clone())
+        .collect::<Vec<_>>();
+    let mut matched_new = vec![false; new_len];
+    let mut old_index = 0usize;
+    let mut new_index = 0usize;
+    while old_index < old_len && new_index < new_len {
+        if chunk_lines_are_context_equivalent(&old_lines[old_index], &new_lines[new_index])
+            && lcs[old_index][new_index] == lcs[old_index + 1][new_index + 1] + 1
+        {
+            matched_new[new_index] = true;
+            if old_lines[old_index].numbered.is_some() || new_lines[new_index].numbered.is_some() {
+                sanitized_new_lines[new_index] = old_lines[old_index].visible.clone();
+            }
+            old_index += 1;
+            new_index += 1;
+        } else if lcs[old_index + 1][new_index] >= lcs[old_index][new_index + 1] {
+            old_index += 1;
+        } else {
+            new_index += 1;
+        }
+    }
+
+    Ok(PreparedChunkLines {
+        old_lines,
+        new_lines: sanitized_new_lines,
+    })
+}
+
+fn lines_match_authored_evidence(actual: &str, expected: &str) -> bool {
+    if actual == expected || actual.trim_end() == expected.trim_end() || actual.trim() == expected.trim() {
+        return true;
+    }
+
+    fn normalise(s: &str) -> String {
+        s.trim()
+            .chars()
+            .map(|c| match c {
+                '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+                | '\u{2212}' => '-',
+                '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+                '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+                '\u{00A0}' | '\u{2002}' | '\u{2003}' | '\u{2004}' | '\u{2005}' | '\u{2006}'
+                | '\u{2007}' | '\u{2008}' | '\u{2009}' | '\u{200A}' | '\u{202F}' | '\u{205F}'
+                | '\u{3000}' => ' ',
+                other => other,
+            })
+            .collect::<String>()
+    }
+
+    normalise(actual) == normalise(expected)
+}
+
+fn target_anchor_at_line(
+    original_lines: &[String],
+    path: &Path,
+    line_number: usize,
+    label: &str,
+) -> Option<ApplyPatchTargetAnchor> {
+    let index = line_number.checked_sub(1)?;
+    Some(ApplyPatchTargetAnchor {
+        path: path.to_path_buf(),
+        line_number,
+        column_number: 1,
+        label: Some(label.to_string()),
+        excerpt: original_lines.get(index).cloned(),
+    })
+}
+
+fn match_numbered_context_anchor(
+    original_lines: &[String],
+    path: &Path,
+    evidence: &NumberedOldSideEvidence,
+    minimum_index: usize,
+) -> Result<(usize, ApplyPatchTargetAnchor), ReplaceMatchError> {
+    let target_index = evidence.line_number - 1;
+    if target_index < minimum_index {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to match numbered context '{} | {}' in {}: line-numbered anchor precedes the current chunk order",
+                evidence.line_number,
+                evidence.text,
+                path.display()
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: target_anchor_at_line(
+                original_lines,
+                path,
+                evidence.line_number,
+                "numbered context",
+            ),
+            blame_first_old_line: false,
+        });
+    }
+    let Some(actual_line) = original_lines.get(target_index) else {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to match numbered context '{} | {}' in {}: line {} is outside the target file",
+                evidence.line_number,
+                evidence.text,
+                path.display(),
+                evidence.line_number
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: None,
+            blame_first_old_line: false,
+        });
+    };
+
+    if !lines_match_authored_evidence(actual_line, &evidence.text) {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to match numbered context '{} | {}' in {}",
+                evidence.line_number,
+                evidence.text,
+                path.display()
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: target_anchor_at_line(
+                original_lines,
+                path,
+                evidence.line_number,
+                "numbered context mismatch",
+            ),
+            blame_first_old_line: false,
+        });
+    }
+
+    Ok((
+        target_index,
+        ApplyPatchTargetAnchor {
+            path: path.to_path_buf(),
+            line_number: evidence.line_number,
+            column_number: 1,
+            label: Some("matched numbered context".to_string()),
+            excerpt: Some(actual_line.clone()),
+        },
+    ))
+}
+
+fn find_numbered_old_side_match(
+    original_lines: &[String],
+    path: &Path,
+    pattern: &[ParsedChunkLine],
+    minimum_index: usize,
+) -> Result<usize, ReplaceMatchError> {
+    let numbered_lines = pattern
+        .iter()
+        .enumerate()
+        .filter_map(|(offset, line)| line.numbered.as_ref().map(|numbered| (offset, numbered)))
+        .collect::<Vec<_>>();
+
+    let Some((first_offset, first_line)) = numbered_lines.first().copied() else {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "internal error: numbered old-side match requested without numbered evidence in {}",
+                path.display()
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: None,
+            blame_first_old_line: true,
+        });
+    };
+
+    if first_line.line_number <= first_offset {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to reconcile numbered old-side evidence in {}: line {} cannot appear at offset {} within one contiguous chunk",
+                path.display(),
+                first_line.line_number,
+                first_offset + 1
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: None,
+            blame_first_old_line: true,
+        });
+    }
+
+    let start_index = first_line.line_number - 1 - first_offset;
+    for (offset, numbered) in &numbered_lines[1..] {
+        if numbered.line_number <= *offset || numbered.line_number - 1 - offset != start_index {
+            return Err(ReplaceMatchError {
+                message: format!(
+                    "Failed to reconcile numbered old-side evidence in {}: numbered lines do not describe one contiguous original span",
+                    path.display()
+                ),
+                chunk_index: 0,
+                is_end_of_file: false,
+                target_anchor: None,
+                blame_first_old_line: true,
+            });
+        }
+    }
+
+    if start_index < minimum_index {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to match numbered old-side evidence in {}: numbered span precedes the current chunk order",
+                path.display()
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: target_anchor_at_line(
+                original_lines,
+                path,
+                first_line.line_number,
+                "numbered old-side evidence",
+            ),
+            blame_first_old_line: true,
+        });
+    }
+
+    if start_index + pattern.len() > original_lines.len() {
+        return Err(ReplaceMatchError {
+            message: format!(
+                "Failed to match numbered old-side evidence in {}: numbered span exceeds the target file length",
+                path.display()
+            ),
+            chunk_index: 0,
+            is_end_of_file: false,
+            target_anchor: target_anchor_at_line(
+                original_lines,
+                path,
+                first_line.line_number,
+                "numbered old-side evidence",
+            ),
+            blame_first_old_line: true,
+        });
+    }
+
+    for (offset, line) in pattern.iter().enumerate() {
+        let actual_index = start_index + offset;
+        let actual_line = &original_lines[actual_index];
+        if !lines_match_authored_evidence(actual_line, &line.visible) {
+            return Err(ReplaceMatchError {
+                message: format!(
+                    "Failed to match numbered old-side evidence in {} at line {}:\n{}",
+                    path.display(),
+                    actual_index + 1,
+                    line.visible
+                ),
+                chunk_index: 0,
+                is_end_of_file: false,
+                target_anchor: Some(ApplyPatchTargetAnchor {
+                    path: path.to_path_buf(),
+                    line_number: actual_index + 1,
+                    column_number: 1,
+                    label: Some("numbered evidence mismatch".to_string()),
+                    excerpt: Some(actual_line.clone()),
+                }),
+                blame_first_old_line: true,
+            });
+        }
+    }
+
+    Ok(start_index)
+}
+
 pub fn apply_update_file_to_content(
     original_contents: &str,
     path: &Path,
     chunks: &[UpdateFileChunk],
 ) -> std::result::Result<String, ApplyPatchError> {
-    apply_update_file_to_content_with_diagnostics(original_contents, path, chunks)
+    apply_update_file_to_content_with_mode(
+        original_contents,
+        path,
+        chunks,
+        numbered_evidence_mode_from_env(),
+    )
+}
+
+fn apply_update_file_to_content_with_mode(
+    original_contents: &str,
+    path: &Path,
+    chunks: &[UpdateFileChunk],
+    mode: NumberedEvidenceMode,
+) -> std::result::Result<String, ApplyPatchError> {
+    apply_update_file_to_content_with_diagnostics(original_contents, path, chunks, mode)
         .map_err(|err| ApplyPatchError::ComputeReplacements(err.message))
 }
 
@@ -1225,13 +1638,14 @@ fn apply_update_file_to_content_with_diagnostics(
     original_contents: &str,
     path: &Path,
     chunks: &[UpdateFileChunk],
+    mode: NumberedEvidenceMode,
 ) -> Result<String, ReplaceMatchError> {
     let original_file_lines = parse_file_lines(original_contents);
     let original_lines = original_file_lines
         .iter()
         .map(|line| line.text.clone())
         .collect::<Vec<_>>();
-    let replacements = compute_replacements(&original_lines, path, chunks)?;
+    let replacements = compute_replacements(&original_lines, path, chunks, mode)?;
     let new_lines = apply_replacements_preserving_file_format(&original_file_lines, &replacements);
     Ok(render_file_lines(&new_lines))
 }
@@ -1410,6 +1824,7 @@ fn dominant_line_ending(lines: &[FileLine]) -> LineEnding {
 fn derive_new_contents_from_chunks(
     path: &Path,
     chunks: &[UpdateFileChunk],
+    mode: NumberedEvidenceMode,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
     let original_contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -1421,7 +1836,7 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    let new_contents = apply_update_file_to_content(&original_contents, path, chunks)?;
+    let new_contents = apply_update_file_to_content_with_mode(&original_contents, path, chunks, mode)?;
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -1435,16 +1850,35 @@ fn compute_replacements(
     original_lines: &[String],
     path: &Path,
     chunks: &[UpdateFileChunk],
+    mode: NumberedEvidenceMode,
 ) -> Result<Vec<(usize, usize, Vec<String>)>, ReplaceMatchError> {
     let mut replacements: Vec<(usize, usize, Vec<String>)> = Vec::new();
     let mut line_index: usize = 0;
 
     for (chunk_index, chunk) in chunks.iter().enumerate() {
+        let prepared = prepare_chunk_lines(chunk, mode).map_err(|message| ReplaceMatchError {
+            message: format!("Failed to prepare numbered old-side evidence in {}: {message}", path.display()),
+            chunk_index,
+            is_end_of_file: false,
+            target_anchor: None,
+            blame_first_old_line: false,
+        })?;
         let mut matched_context_anchor = None;
         // If a chunk has a `change_context`, we use seek_sequence to find it, then
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
-            if let Some(idx) = seek_sequence::seek_sequence(
+            if let Some(numbered_context) = parse_numbered_old_side_evidence(ctx_line) {
+                match match_numbered_context_anchor(original_lines, path, &numbered_context, line_index) {
+                    Ok((idx, anchor)) => {
+                        line_index = idx + 1;
+                        matched_context_anchor = Some(anchor);
+                    }
+                    Err(mut err) => {
+                        err.chunk_index = chunk_index;
+                        return Err(err);
+                    }
+                }
+            } else if let Some(idx) = seek_sequence::seek_sequence(
                 original_lines,
                 std::slice::from_ref(ctx_line),
                 line_index,
@@ -1473,7 +1907,7 @@ fn compute_replacements(
             }
         }
 
-        if chunk.old_lines.is_empty() {
+        if prepared.old_lines.is_empty() {
             // Pure addition (no old lines). We'll add them at the end or just
             // before the final empty line if one exists.
             let insertion_idx = if original_lines.last().is_some_and(String::is_empty) {
@@ -1481,7 +1915,7 @@ fn compute_replacements(
             } else {
                 original_lines.len()
             };
-            replacements.push((insertion_idx, 0, chunk.new_lines.clone()));
+            replacements.push((insertion_idx, 0, prepared.new_lines.clone()));
             continue;
         }
 
@@ -1496,44 +1930,75 @@ fn compute_replacements(
         // final element so that modifications touching the end‑of‑file can be
         // located reliably.
 
-        let mut pattern: &[String] = &chunk.old_lines;
-        let mut found =
-            seek_sequence::seek_sequence(original_lines, pattern, line_index, chunk.is_end_of_file);
+        let mut pattern: &[ParsedChunkLine] = &prepared.old_lines;
+        let mut new_slice: &[String] = &prepared.new_lines;
 
-        let mut new_slice: &[String] = &chunk.new_lines;
+        let mut pattern_text = pattern.iter().map(|line| line.visible.clone()).collect::<Vec<_>>();
+        let mut found = if pattern.iter().any(|line| line.numbered.is_some()) {
+            Some(find_numbered_old_side_match(original_lines, path, pattern, line_index))
+        } else {
+            Some(
+                seek_sequence::seek_sequence(original_lines, &pattern_text, line_index, chunk.is_end_of_file)
+                    .ok_or_else(|| ReplaceMatchError {
+                        message: format!(
+                            "Failed to find expected lines in {}:\n{}",
+                            path.display(),
+                            pattern_text.join("\n")
+                        ),
+                        chunk_index,
+                        is_end_of_file: chunk.is_end_of_file,
+                        target_anchor: matched_context_anchor.clone(),
+                        blame_first_old_line: true,
+                    }),
+            )
+        };
 
-        if found.is_none() && pattern.last().is_some_and(String::is_empty) {
+        if found.as_ref().is_some_and(|result| result.is_err()) && pattern.last().is_some_and(|line| line.visible.is_empty()) {
             // Retry without the trailing empty line which represents the final
             // newline in the file.
             pattern = &pattern[..pattern.len() - 1];
+            pattern_text = pattern.iter().map(|line| line.visible.clone()).collect::<Vec<_>>();
             if new_slice.last().is_some_and(String::is_empty) {
                 new_slice = &new_slice[..new_slice.len() - 1];
             }
 
-            found = seek_sequence::seek_sequence(
-                original_lines,
-                pattern,
-                line_index,
-                chunk.is_end_of_file,
-            );
+            found = if pattern.iter().any(|line| line.numbered.is_some()) {
+                Some(find_numbered_old_side_match(original_lines, path, pattern, line_index))
+            } else {
+                Some(
+                    seek_sequence::seek_sequence(
+                        original_lines,
+                        &pattern_text,
+                        line_index,
+                        chunk.is_end_of_file,
+                    )
+                    .ok_or_else(|| ReplaceMatchError {
+                        message: format!(
+                            "Failed to find expected lines in {}:\n{}",
+                            path.display(),
+                            pattern_text.join("\n")
+                        ),
+                        chunk_index,
+                        is_end_of_file: chunk.is_end_of_file,
+                        target_anchor: matched_context_anchor.clone(),
+                        blame_first_old_line: true,
+                    }),
+                )
+            };
         }
 
-        if let Some(start_idx) = found {
-            replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
-            line_index = start_idx + pattern.len();
-        } else {
-            return Err(ReplaceMatchError {
-                message: format!(
-                    "Failed to find expected lines in {}:\n{}",
-                    path.display(),
-                    chunk.old_lines.join("\n"),
-                ),
-                chunk_index,
-                is_end_of_file: chunk.is_end_of_file,
-                target_anchor: matched_context_anchor,
-                blame_first_old_line: true,
-            });
-        }
+        let start_idx = match found.expect("pattern match result should exist") {
+            Ok(start_idx) => start_idx,
+            Err(mut err) => {
+                err.chunk_index = chunk_index;
+                if err.target_anchor.is_none() {
+                    err.target_anchor = matched_context_anchor;
+                }
+                return Err(err);
+            }
+        };
+        replacements.push((start_idx, pattern.len(), new_slice.to_vec()));
+        line_index = start_idx + pattern.len();
     }
 
     replacements.sort_by(|(lhs_idx, _, _), (rhs_idx, _, _)| lhs_idx.cmp(rhs_idx));
@@ -1563,7 +2028,7 @@ pub fn unified_diff_from_chunks_with_context(
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path, chunks)?;
+    } = derive_new_contents_from_chunks(path, chunks, numbered_evidence_mode_from_env())?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {
@@ -2381,6 +2846,127 @@ g
         let updated = apply_update_file_to_content("head\r\nbody", path, &chunks).unwrap();
 
         assert_eq!(updated, "head\r\nbody\r\nadded");
+    }
+
+    #[test]
+    fn test_apply_update_file_supports_numbered_context_anchor() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: Some("4 | def handler():".to_string()),
+            old_lines: vec!["    value = 1".to_string()],
+            new_lines: vec!["    value = 2".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content(
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+            path,
+            &chunks,
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated,
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_update_file_supports_dense_numbered_old_side_evidence() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["4 | def handler():".to_string(), "5 |     value = 1".to_string()],
+            new_lines: vec!["4 | def handler():".to_string(), "    value = 2".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content_with_mode(
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+            path,
+            &chunks,
+            NumberedEvidenceMode::Full,
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated,
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_update_file_keeps_number_like_added_line_literal_in_full_mode() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["1 | value = 1".to_string()],
+            new_lines: vec!["1 | value = 1".to_string(), "2 | inserted = 2".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content_with_mode(
+            "value = 1\n",
+            path,
+            &chunks,
+            NumberedEvidenceMode::Full,
+        )
+        .expect("number-like added lines should remain literal text");
+
+        assert_eq!(updated, "value = 1\n2 | inserted = 2\n");
+    }
+
+    #[test]
+    fn test_apply_update_file_treats_dense_numbered_old_side_as_literal_by_default() {
+        let path = Path::new("rendered.txt");
+        let chunks = vec![UpdateFileChunk {
+            change_context: None,
+            old_lines: vec!["121 | value = 1".to_string()],
+            new_lines: vec!["changed".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content("121 | value = 1\n", path, &chunks).unwrap();
+
+        assert_eq!(updated, "changed\n");
+    }
+
+    #[test]
+    fn test_apply_patch_in_dir_numbered_context_does_not_fallback_to_other_text_match() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("app.txt");
+        fs::write(&path, "alpha\nbeta\nalpha\n").unwrap();
+
+        let patch =
+            wrap_patch("*** Update File: app.txt\n@@ 2 | alpha\n-beta\n+gamma");
+        let report = apply_patch_in_dir(&patch, dir.path()).unwrap();
+
+        assert_eq!(report.status, ApplyPatchStatus::Failure);
+        assert_eq!(report.failed_units[0].code, "MATCH_INVALID_CONTEXT");
+        let anchor = report.failed_units[0]
+            .target_anchor
+            .as_ref()
+            .expect("target anchor");
+        assert_eq!(anchor.path, path);
+        assert_eq!(anchor.line_number, 2);
+        assert_eq!(anchor.excerpt.as_deref(), Some("beta"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "alpha\nbeta\nalpha\n");
+    }
+
+    #[test]
+    fn test_apply_patch_in_dir_interprets_numbered_old_side_against_original_snapshot() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("lines.txt");
+        fs::write(&path, "a\nb\nc\n").unwrap();
+
+        let patch = wrap_patch(
+            "*** Update File: lines.txt\n@@\n-1 | a\n@@\n-2 | b\n+beta",
+        );
+        let report = apply_patch_in_dir_with_mode(&patch, dir.path(), NumberedEvidenceMode::Full)
+            .unwrap();
+
+        assert_eq!(report.status, ApplyPatchStatus::FullSuccess);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "beta\nc\n");
     }
 
     #[cfg(windows)]

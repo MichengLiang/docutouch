@@ -451,7 +451,7 @@ mod tests {
     fn patch_failure_persists_failed_patch_source_for_inline_patch() {
         let temp = tempfile::tempdir().expect("tempdir");
         fs::write(temp.path().join("app.py"), "value = 1\n").expect("seed file");
-        let patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n";
+        let patch = "*** Begin Patch\n*** Update File: app.py\n@@ 1 | value = 1\n-missing = 1\n+value = 2\n*** End Patch\n";
         let context = PatchPresentationContext {
             runtime_base_dir: temp.path().to_path_buf(),
             display_base_dir: Some(temp.path().to_path_buf()),
@@ -481,7 +481,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let patch_path = temp.path().join("input.patch");
         fs::write(temp.path().join("app.py"), "value = 1\n").expect("seed file");
-        let patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n";
+        let patch = "*** Begin Patch\n*** Update File: app.py\n@@ 1 | value = 1\n-missing = 1\n+value = 2\n*** End Patch\n";
         fs::write(&patch_path, patch).expect("seed patch file");
         let context = PatchPresentationContext {
             runtime_base_dir: temp.path().to_path_buf(),
@@ -592,7 +592,7 @@ mod tests {
             display_base_dir: Some(temp.path().to_path_buf()),
         };
 
-        let patch_one_digit = "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n";
+        let patch_one_digit = "*** Begin Patch\n*** Update File: app.py\n@@ 1 | value = 1\n-missing = 1\n+value = 2\n*** End Patch\n";
         let outcome = apply_patch_program(patch_one_digit, &context.runtime_base_dir);
         let message = format_patch_outcome(patch_one_digit, &context, &outcome)
             .expect_err("patch should fail");
@@ -632,7 +632,7 @@ mod tests {
                 "*** Add File: created-{index}.txt\n+hello {index}\n"
             ));
         }
-        patch.push_str("*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n");
+        patch.push_str("*** Update File: missing.txt\n@@ 1 | old\n-old\n+new\n*** End Patch\n");
 
         let outcome = apply_patch_program(&patch, &context.runtime_base_dir);
         let message =
@@ -663,11 +663,11 @@ mod tests {
             "*** Add File: created.txt\n",
             "+hello\n",
             "*** Update File: a.txt\n",
-            "@@\n",
+            "@@ 1 | value = 1\n",
             "-missing a\n",
             "+value = 2\n",
             "*** Update File: b.txt\n",
-            "@@\n",
+            "@@ 1 | value = 1\n",
             "-missing b\n",
             "+value = 3\n",
             "*** End Patch\n",

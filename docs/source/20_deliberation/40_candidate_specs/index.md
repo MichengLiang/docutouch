@@ -64,6 +64,9 @@ candidate spec 是 accepted promotion 的默认直接前置态，
 * - `apply_splice_formal_semantics_draft.md`
   - Process / Deliberation Object
   - 记录 `apply_splice` formal grammar 与 execution semantics 的 candidate spec
+* - `apply_patch_line_number_assisted_locking_draft.md`
+  - Process / Deliberation Object
+  - 保留 `apply_patch` line-number-assisted locking promotion 前的 draft 摘要与 pointer
 ```
 
 ## 页面目录
@@ -73,4 +76,5 @@ candidate spec 是 accepted promotion 的默认直接前置态，
 
 authoring_contract
 apply_splice_formal_semantics_draft
+apply_patch_line_number_assisted_locking_draft
 ```

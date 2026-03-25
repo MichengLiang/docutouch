@@ -124,7 +124,7 @@
 | 不可合并性   | 不能并入 Grammar，因为 grammar 只讲合法结构，不讲精度升级策略；不能并入 Authoring Invariants，因为这不是“永远必须”，而是条件触发的定位升级机制 |
 | 删除后损失   | 默认 3 行上下文不唯一时，模型缺乏提高锚定精度的正规路径                                                               |
 | 写作纪律    | 采用严格层级：默认 → 单级 `@@` → 多级 `@@`                                                               |
-| 术语纪律    | “default context”“insufficient uniqueness”“chain multiple `@@` headers”术语稳定                 |
+| 术语纪律    | “default context”“insufficient uniqueness”“one numbered `@@` anchor”术语稳定                 |
 
 **结论**：这一节必须存在，因为它负责控制 hunk 的定位精度，这是 patch 可用性的关键环节。
 
@@ -346,8 +346,8 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 ### Anchor Precision Escalation
 
 * By default, prefer 3 lines of context above and 3 lines of context below each change.
-* If default context does not uniquely identify the target location, add an `@@` header such as `@@ class Example` or `@@ def handler():`.
-* If one `@@` header is still insufficient, chain multiple `@@` headers from outer scope to inner scope until the target location is uniquely anchored.
+* If default context does not uniquely identify the target location, add one numbered `@@` anchor such as `@@ 120 | def handler():`.
+* If one numbered anchor is still insufficient, strengthen the patch with fresher surrounding context or a more local truthful anchor. Do not stack multiple `@@` headers.
 * When adjacent changes fall within the same local region, do not duplicate overlapping context unless additional context is required for unique anchoring.
 
 ### Execution Semantics

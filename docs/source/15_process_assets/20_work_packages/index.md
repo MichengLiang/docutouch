@@ -67,6 +67,9 @@
 * - `apply_splice_deeper_substrate_extraction_work_package.md`
   - Process asset page
   - `apply_splice` deeper substrate seam 的专项工作包
+* - `apply_patch_line_number_assist_baseline_locking_work_package.md`
+  - Process asset page
+  - `apply_patch` line-number-assisted locking broad implementation 之前的基线锁定工作包
 ```
 
 ## 页面目录
@@ -79,4 +82,5 @@ work_package_template
 work_package_minimal_example
 apply_splice_baseline_locking_work_package
 apply_splice_deeper_substrate_extraction_work_package
+apply_patch_line_number_assist_baseline_locking_work_package
 ```

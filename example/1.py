@@ -144,6 +144,10 @@ def build_success_patch() -> str:
         *** Begin Patch
         *** Add File: {DEMO_DIR_NAME}/created/success.txt
         +Hello from the diagnostics showcase.
+        *** Update File: {DEMO_DIR_NAME}/src/app.py
+        @@
+        -value = 1
+        +value = 2
         *** End Patch
         """
     )
@@ -191,7 +195,7 @@ def build_target_anchor_mismatch_patch() -> str:
         f"""\
         *** Begin Patch
         *** Update File: {DEMO_DIR_NAME}/src/handler.py
-        @@ def handler():
+        @@ 1 | def handler():
         -    missing = 1
         +    value = 2
         *** End Patch
@@ -219,7 +223,7 @@ def build_large_partial_failure_patch() -> str:
     for index in range(10):
         body.append(f"*** Add File: {DEMO_DIR_NAME}/large/created-{index}.txt")
         body.append(f"+hello {index}")
-    body.extend(
+        body.extend(
         [
             f"*** Update File: {DEMO_DIR_NAME}/large/missing.txt",
             "@@",

@@ -53,8 +53,9 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 
 * By default, prefer 3 lines of context above and 3 lines of context below each change.
 * “3 lines” is a default authoring preference, not a required patch shape.
-* If default context does not uniquely identify the target location, add an `@@` header such as `@@ class Example` or `@@ def handler():`.
-* If one `@@` header is still insufficient, strengthen the patch with more local context or choose a more specific single `@@` header.
+* If default context does not uniquely identify the target location, add one numbered `@@` anchor such as `@@ 120 | def handler():`.
+* The default public guidance teaches one numbered anchor, not raw textual `@@ class Example` / `@@ def handler():` headers.
+* If one numbered anchor is still insufficient, strengthen the patch with fresher local context or a more local truthful anchor.
 * Do not stack multiple `@@` header lines; the current parser consumes at most one explicit header per hunk.
 * When adjacent changes fall within the same local region, do not duplicate overlapping context unless additional context is required for unique anchoring.
 
@@ -123,7 +124,7 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 *** Add File: docs/todo.txt
 +first item
 *** Update File: src/app.py
-@@ def greet():
+@@ 12 | def greet():
 -print("Hi")
 +print("Hello")
 *** Delete File: obsolete.txt
@@ -161,10 +162,10 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 * In an update hunk, body lines are patch lines, not freeform restatements of the file.
 * Preserve the leading space, `-`, or `+` on every hunk body line. The prefix is part of the syntax, not decoration.
 * Use unchanged context to anchor the change region, not to paraphrase surrounding content.
-* When a header is used, treat it as an anchoring aid rather than as a substitute for a well-formed hunk body.
+* When a header is used, prefer one numbered anchor such as `@@ 120 | def handler():`.
 * A header line is not a hunk body line.
 * Do not mechanically repeat a header line in the hunk body merely because that same text appears in the header.
-* Do not introduce a second `@@` header line while trying to strengthen anchoring; use one explicit header plus surrounding context lines instead.
+* Do not introduce a second `@@` header line while trying to strengthen anchoring; use one numbered anchor plus surrounding context lines instead.
 * When nearby edits share one local region, prefer one coherent anchored region over duplicated overlapping context.
 * Include only the context actually needed to identify the change region and carry the edit.
 * Do not invent a new hunk shape while trying to strengthen the anchor.
@@ -174,8 +175,7 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 * Start with the default local context.
 * If that context is stale, non-unique, or too weak to identify the target region, strengthen the anchor.
 * Use less than the default context when a smaller anchored region is already uniquely identifiable.
-* Prefer the nearest stable lexical boundary that actually helps disambiguate the location.
-* Prefer outer-to-inner anchoring only when one level is insufficient.
+* Prefer the nearest stable visible line whose absolute line number you can truthfully cite in the anchor.
 * Do not expand context merely for readability when uniqueness is already satisfied.
 
 ### Interpretation Discipline
@@ -191,7 +191,7 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 * On a context-mismatch failure, first re-read the current target content.
 * Then verify path, operation type, and patch shape before hypothesizing runtime defects.
 * Then check whether the selected context is stale, non-unique, or over-expanded.
-* Then strengthen anchoring with one or more `@@` header lines if uniqueness is still insufficient.
+* Then regenerate the patch with one truthful numbered anchor and fresher local context if uniqueness is still insufficient.
 * Then use warnings and targeted diagnostics to refine the next patch.
 * Do not collapse all failures into a single “tool broken” conclusion.
 

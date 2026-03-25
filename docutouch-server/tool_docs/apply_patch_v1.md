@@ -36,8 +36,9 @@ Patch Writing Guidance:
 - Deleted files use `*** Delete File: <path>` and nothing follows.
 - Renames use `*** Move to: <new path>` immediately after `*** Update File: ...`.
 - By default, prefer 3 lines of context above and below each change.
-- If 3 lines of context are not unique enough, add an `@@` header such as `@@ class Example` or `@@ def handler():`.
-- If one header is still not specific enough, strengthen the patch with more surrounding context or a more specific single `@@` header. Do not stack multiple `@@` header lines; the current parser consumes at most one explicit header per hunk.
+- If 3 lines of context are not unique enough, add one numbered `@@` anchor such as `@@ 120 | def handler():`.
+- The default public guidance teaches one numbered anchor, not raw textual `@@ class Example` / `@@ def handler():` headers.
+- If one numbered anchor is still not specific enough, strengthen the patch with fresher surrounding context or a more local truthful anchor. Do not stack multiple `@@` header lines; the current parser consumes at most one explicit header per hunk.
 
 Execution Semantics:
 
@@ -98,7 +99,7 @@ Example:
 *** Add File: docs/todo.txt
 +first item
 *** Update File: src/app.py
-@@ def greet():
+@@ 12 | def greet():
 -print("Hi")
 +print("Hello")
 *** Delete File: obsolete.txt

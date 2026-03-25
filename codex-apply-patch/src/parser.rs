@@ -21,7 +21,9 @@
 //! eof_line: "*** End of File" LF
 //!
 //! The parser below is a little more lenient than the explicit spec and allows for
-//! leading/trailing whitespace around patch markers.
+//! leading/trailing whitespace around patch markers. It also accepts a local
+//! line-number-assisted extension for old-side authored evidence such as
+//! `@@ 120 | def handler():` and `-121 | old value`.
 use crate::ApplyPatchArgs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -91,10 +93,18 @@ use Hunk::*;
 pub struct UpdateFileChunk {
     /// A single line of context used to narrow down the position of the chunk
     /// (this is usually a class, method, or function definition.)
+    ///
+    /// When the author uses line-number-assisted locking, the raw authored
+    /// evidence is preserved here, e.g. `120 | def handler():`.
     pub change_context: Option<String>,
 
-    /// A contiguous block of lines that should be replaced with `new_lines`.
-    /// `old_lines` must occur strictly after `change_context`.
+    /// A contiguous block of old-side authored evidence that should be
+    /// replaced with `new_lines`. `old_lines` must occur strictly after
+    /// `change_context`.
+    ///
+    /// When the author uses line-number-assisted locking on old-side lines,
+    /// the raw authored evidence is preserved here, e.g.
+    /// `121 |     value = 1`.
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
 
@@ -125,6 +135,57 @@ pub struct PatchChunkSource {
     pub first_old_line_column: Option<usize>,
     pub first_removed_line_number: Option<usize>,
     pub first_removed_line_column: Option<usize>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NumberedHeaderEvidence {
+    None,
+    Valid,
+}
+
+fn classify_numbered_header_evidence(payload: &str) -> Result<NumberedHeaderEvidence, String> {
+    let Some(first) = payload.chars().next() else {
+        return Ok(NumberedHeaderEvidence::None);
+    };
+    if !first.is_ascii_digit() {
+        return Ok(NumberedHeaderEvidence::None);
+    }
+
+    let digit_count = payload
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    let digits = &payload[..digit_count];
+    let rest = &payload[digit_count..];
+
+    if let Some(visible) = rest.strip_prefix(" | ") {
+        if digits.starts_with('0') {
+            return Err(
+                "line-number-assisted evidence must use a positive integer without leading zeroes"
+                    .to_string(),
+            );
+        }
+        let parsed = digits.parse::<usize>().map_err(|_| {
+            "line-number-assisted evidence must use a valid positive integer".to_string()
+        })?;
+        if parsed == 0 {
+            return Err(
+                "line-number-assisted evidence must use a positive integer without leading zeroes"
+                    .to_string(),
+            );
+        }
+        let _ = visible;
+        return Ok(NumberedHeaderEvidence::Valid);
+    }
+
+    if rest.starts_with('|') || rest.starts_with(" |") || rest.is_empty() {
+        return Err(
+            "line-number-assisted evidence must use the exact 'N | visible text' delimiter"
+                .to_string(),
+        );
+    }
+
+    Ok(NumberedHeaderEvidence::None)
 }
 
 pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
@@ -433,6 +494,10 @@ fn parse_update_file_chunk(
     let (change_context, start_index) = if lines[0] == EMPTY_CHANGE_CONTEXT_MARKER {
         (None, 1)
     } else if let Some(context) = lines[0].strip_prefix(CHANGE_CONTEXT_MARKER) {
+        classify_numbered_header_evidence(context).map_err(|message| InvalidHunkError {
+            message,
+            line_number,
+        })?;
         (Some(context.to_string()), 1)
     } else {
         if !allow_missing_context {
@@ -890,6 +955,114 @@ fn test_update_file_chunk() {
                 first_removed_line_column: Some(1),
             },
             6
+        ))
+    );
+    assert_eq!(
+        parse_update_file_chunk(
+            &[
+                "@@ 120 | def handler():",
+                " 121 |     value = 1",
+                "-122 |     return value",
+                "+    value = 2",
+                " 123 | ",
+                "*** End Patch",
+            ],
+            123,
+            false
+        ),
+        Ok((
+            UpdateFileChunk {
+                change_context: Some("120 | def handler():".to_string()),
+                old_lines: vec![
+                    "121 |     value = 1".to_string(),
+                    "122 |     return value".to_string(),
+                    "123 | ".to_string(),
+                ],
+                new_lines: vec![
+                    "121 |     value = 1".to_string(),
+                    "    value = 2".to_string(),
+                    "123 | ".to_string(),
+                ],
+                is_end_of_file: false
+            },
+            PatchChunkSource {
+                line_number: 123,
+                column_number: 1,
+                first_old_line_number: Some(124),
+                first_old_line_column: Some(1),
+                first_removed_line_number: Some(125),
+                first_removed_line_column: Some(1),
+            },
+            5
+        ))
+    );
+    assert_eq!(
+        parse_update_file_chunk(&["@@ 01 | def handler():", "-old", "+new"], 123, false),
+        Err(InvalidHunkError {
+            message:
+                "line-number-assisted evidence must use a positive integer without leading zeroes"
+                    .to_string(),
+            line_number: 123
+        })
+    );
+    assert_eq!(
+        parse_update_file_chunk(&["@@", "+121 | added"], 123, false),
+        Ok((
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec![],
+                new_lines: vec!["121 | added".to_string()],
+                is_end_of_file: false
+            },
+            PatchChunkSource {
+                line_number: 123,
+                column_number: 1,
+                first_old_line_number: None,
+                first_old_line_column: None,
+                first_removed_line_number: None,
+                first_removed_line_column: None,
+            },
+            2
+        ))
+    );
+    assert_eq!(
+        parse_update_file_chunk(&["@@", "-0 | old", "+new"], 123, false),
+        Ok((
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["0 | old".to_string()],
+                new_lines: vec!["new".to_string()],
+                is_end_of_file: false
+            },
+            PatchChunkSource {
+                line_number: 123,
+                column_number: 1,
+                first_old_line_number: Some(124),
+                first_old_line_column: Some(1),
+                first_removed_line_number: Some(124),
+                first_removed_line_column: Some(1),
+            },
+            3
+        ))
+    );
+    assert_eq!(
+        parse_update_file_chunk(&["@@", " 12| old", "+new"], 123, false),
+        Ok((
+            UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["12| old".to_string()],
+                new_lines: vec!["12| old".to_string(), "new".to_string()],
+                is_end_of_file: false
+            },
+            PatchChunkSource {
+                line_number: 123,
+                column_number: 1,
+                first_old_line_number: Some(124),
+                first_old_line_column: Some(1),
+                first_removed_line_number: None,
+                first_removed_line_column: None,
+            },
+            3
         ))
     );
     assert_eq!(

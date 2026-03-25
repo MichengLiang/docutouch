@@ -51,8 +51,10 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 ### Anchor Precision Escalation
 
 * By default, prefer 3 lines of context above and 3 lines of context below each change.
-* If default context does not uniquely identify the target location, add an `@@` header such as `@@ class Example` or `@@ def handler():`.
-* If one `@@` header is still insufficient, strengthen the patch with more local context or choose a more specific single `@@` header.
+* If default context does not uniquely identify the target location, you may add one numbered anchor header such as `@@ 120 | def handler():`.
+* Numbered line assist is optional. When ordinary context is already unique enough, you do not need to add it.
+* The default public guidance teaches one numbered anchor header, not raw textual `@@ class Example` / `@@ def handler():` headers.
+* If one numbered anchor is still insufficient, strengthen the patch with fresher or more local surrounding context rather than stacking multiple `@@` headers.
 * When adjacent changes fall within the same local region, do not duplicate overlapping context unless additional context is required for unique anchoring.
 
 ### Execution Semantics
@@ -121,7 +123,7 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 +Hello world
 *** Update File: src/app.py
 *** Move to: src/main.py
-@@ def greet():
+@@
 -print("Hi")
 +print("Hello, world!")
 *** Delete File: obsolete.txt
@@ -148,22 +150,14 @@ Within a hunk each line starts with:
 
 For instructions on [context_before] and [context_after]:
 - By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.
-- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
+- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, you may use one numbered `@@` anchor header. For instance, we might have:
 
 ```
-@@ class BaseClass
+@@ 120 | def handler():
 [3 lines of pre-context]
 - [old_code]
 + [new_code]
 [3 lines of post-context]
 ```
 
-- If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, strengthen the patch with more surrounding context lines or a more specific single `@@` header. Do not stack multiple `@@` header lines; the current parser consumes at most one explicit header per hunk. For instance:
-
-```
-@@ class BaseClass.def method
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
-```
+- If a single numbered anchor and 3 lines of context are still insufficient, strengthen the patch with fresher surrounding context or a more local truthful anchor. Do not stack multiple `@@` header lines; the current parser consumes at most one explicit header per hunk.

@@ -3,6 +3,12 @@
 这个目录用于展示当前 DocuTouch Rust 实现的真实运行效果，尤其是
 `apply_patch` 在成功与失败路径下的可见输出形态。
 
+当前示例不会把所有 `apply_patch` update 都写成带号形式。
+
+它会保留普通 patch 主路径，
+并单独展示一条 `@@ N | visible text` 的 numbered-assist case，
+用来说明这是一种可选的消歧手段，而不是默认必写负担。
+
 ## 文件
 
 - `1.py`
@@ -56,6 +62,7 @@ uv run python example/1.py
 - compact full failure 长什么样
 - partial failure 长什么样
 - target anchor 怎么显示
+- 可选的 numbered-assist case 长什么样
 - failed patch source 持久化后，diagnostics 里会怎么引用 patch path
 
 ## 注意事项

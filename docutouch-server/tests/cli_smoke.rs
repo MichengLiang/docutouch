@@ -4,7 +4,7 @@ mod support;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 use serde_json::json;
-use std::process::Output;
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use support::{TEST_CHILD_TIMEOUT, json_object, timeout_result};
 use tempfile::TempDir;
@@ -43,6 +43,10 @@ fn patch_preserve_crlf_text() -> &'static str {
 
 fn patch_preserve_no_final_newline_text() -> &'static str {
     "*** Begin Patch\n*** Update File: no_newline.txt\n@@\n-no newline at end\n+first line\n+second line\n*** End Patch\n"
+}
+
+fn patch_dense_numbered_old_side_text() -> &'static str {
+    "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
 }
 
 fn splice_success_text() -> &'static str {
@@ -120,6 +124,31 @@ async fn call_server_tool_error(
 
 fn run_cli(cwd: &std::path::Path, args: &[&str], stdin: Option<&str>) -> anyhow::Result<Output> {
     support::run_cli(cwd, args, stdin)
+}
+
+fn run_cli_with_env(
+    cwd: &std::path::Path,
+    args: &[&str],
+    stdin: Option<&str>,
+    envs: &[(&str, &str)],
+) -> anyhow::Result<Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_docutouch"));
+    command
+        .current_dir(cwd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn()?;
+    if let Some(input) = stdin {
+        use std::io::Write as _;
+        child.stdin.as_mut().expect("stdin pipe").write_all(input.as_bytes())?;
+    }
+    child.stdin.take();
+    support::wait_with_output_timeout(child, "docutouch CLI child with env in cli_smoke")
 }
 
 fn utf8(output: &[u8]) -> String {
@@ -292,6 +321,42 @@ async fn cli_patch_success_matches_mcp_output_and_reads_stdin() -> anyhow::Resul
         std::fs::read_to_string(cli_temp.path().join("docs").join("notes.md"))?,
         "hello\n"
     );
+    Ok(())
+}
+
+#[test]
+fn cli_patch_flag_full_enables_dense_numbered_old_side_evidence() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
+
+    let cli_output = run_cli(
+        temp.path(),
+        &["patch", "--numbered-evidence-mode", "full"],
+        Some(patch_dense_numbered_old_side_text()),
+    )?;
+
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), "Success. Updated the following files:\nM app.py");
+    assert!(utf8(&cli_output.stderr).is_empty());
+    assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
+    Ok(())
+}
+
+#[test]
+fn cli_patch_flag_overrides_full_env_with_header_only_for_literal_numbered_text() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.py"), "121 | value = 1\n")?;
+    let patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-121 | value = 1\n+value = 2\n*** End Patch\n";
+
+    let cli_output = run_cli_with_env(
+        temp.path(),
+        &["patch", "--numbered-evidence-mode", "header_only"],
+        Some(patch),
+        &[("DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE", "full")],
+    )?;
+
+    assert!(cli_output.status.success());
+    assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
     Ok(())
 }
 

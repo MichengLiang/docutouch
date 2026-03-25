@@ -70,6 +70,9 @@
 * - `apply_splice_engineering_hardening_readiness.md`
   - Process asset page
   - `apply_splice` 工程质量 hardening 波次的 merge-readiness gate host
+* - `apply_patch_line_number_assist_acceptance_criteria.md`
+  - Process asset page
+  - `apply_patch` line-number-assisted locking rollout 的 acceptance / QA gate host
 ```
 
 ## 页面目录
@@ -84,4 +87,5 @@ apply_splice_acceptance_criteria
 apply_splice_architecture_diagnostics_and_qa_readiness
 apply_splice_qa_checklist
 apply_splice_engineering_hardening_readiness
+apply_patch_line_number_assist_acceptance_criteria
 ```

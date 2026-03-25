@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use codex_apply_patch::APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -269,6 +270,74 @@ fn test_apply_patch_cli_preserves_crlf_when_updating_existing_file() -> anyhow::
     .stdout("Success. Updated the following files:\nM crlf.txt\n");
 
     assert_eq!(fs::read(&target_path)?, b"a\r\nx\r\ny\r\nc\r\n");
+
+    Ok(())
+}
+
+#[test]
+fn test_apply_patch_cli_supports_numbered_context_anchor() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("app.py");
+    fs::write(
+        &target_path,
+        "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+    )?;
+
+    run_apply_patch_in_dir(
+        tmp.path(),
+        "*** Begin Patch\n*** Update File: app.py\n@@ 4 | def handler():\n-    value = 1\n+    value = 2\n*** End Patch",
+    )?
+    .success()
+    .stdout("Success. Updated the following files:\nM app.py\n");
+
+    assert_eq!(
+        fs::read_to_string(&target_path)?,
+        "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_apply_patch_cli_supports_dense_numbered_old_side_evidence() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("app.py");
+    fs::write(
+        &target_path,
+        "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+    )?;
+
+    let mut cmd = apply_patch_command(tmp.path())?;
+    cmd.env(APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, "full");
+    cmd.arg(
+        "*** Begin Patch\n*** Update File: app.py\n@@\n 4 | def handler():\n-5 |     value = 1\n+    value = 2\n*** End Patch",
+    )
+    .assert()
+    .success()
+    .stdout("Success. Updated the following files:\nM app.py\n");
+
+    assert_eq!(
+        fs::read_to_string(&target_path)?,
+        "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_apply_patch_cli_header_only_mode_treats_dense_numbered_text_literal() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let target_path = tmp.path().join("rendered.txt");
+    fs::write(&target_path, "121 | value = 1\n")?;
+
+    run_apply_patch_in_dir(
+        tmp.path(),
+        "*** Begin Patch\n*** Update File: rendered.txt\n@@\n-121 | value = 1\n+changed\n*** End Patch",
+    )?
+    .success()
+    .stdout("Success. Updated the following files:\nM rendered.txt\n");
+
+    assert_eq!(fs::read_to_string(&target_path)?, "changed\n");
 
     Ok(())
 }

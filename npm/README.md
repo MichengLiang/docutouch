@@ -16,14 +16,20 @@ Other platforms fail with a clear error message.
 Run without a global install:
 
 ```bash
-npx @michengliang/docutouch
+npx @michengliang/docutouch --help
+```
+
+To start the stdio MCP server explicitly:
+
+```bash
+npx @michengliang/docutouch serve
 ```
 
 Or install globally:
 
 ```bash
 npm install -g @michengliang/docutouch
-docutouch
+docutouch --help
 ```
 
 ## What It Downloads

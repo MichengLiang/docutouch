@@ -126,6 +126,18 @@ fn run_cli(cwd: &std::path::Path, args: &[&str], stdin: Option<&str>) -> anyhow:
     support::run_cli(cwd, args, stdin)
 }
 
+#[test]
+fn cli_without_args_prints_usage_instead_of_starting_server() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let output = run_cli(temp.path(), &[], None)?;
+    assert!(output.status.success());
+    let stdout = utf8(&output.stdout);
+    assert!(stdout.contains("Usage:"));
+    assert!(stdout.contains("serve"));
+    assert!(utf8(&output.stderr).is_empty());
+    Ok(())
+}
+
 fn run_cli_with_env(
     cwd: &std::path::Path,
     args: &[&str],

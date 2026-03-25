@@ -67,13 +67,14 @@ pub async fn dispatch_from_env() -> Result<Dispatch> {
         }
     };
 
-    if args.is_empty() {
-        return Ok(Dispatch::RunServer);
-    }
-
     let program = std::env::args()
         .next()
         .unwrap_or_else(|| "docutouch".to_string());
+    if args.is_empty() {
+        write_stdout(&usage(&program))?;
+        return Ok(Dispatch::Exit(0));
+    }
+
     match args[0].as_str() {
         "serve" => {
             if args.len() == 1 {
@@ -586,7 +587,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Show this help\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - Running `{program}` with no subcommand prints help; use `{program} serve` to start the stdio MCP server.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 

@@ -189,14 +189,16 @@ release 资产的目标形态是：
 启动 stdio MCP server：
 
 ```bash
+cargo run -p docutouch-server -- serve
+```
+
+如果直接运行裸命令：
+
+```bash
 cargo run -p docutouch-server
 ```
 
-也可以显式写成：
-
-```bash
-cargo run -p docutouch-server -- serve
-```
+当前会打印 CLI usage；真正启动 stdio MCP server 请使用 `serve`。
 
 如果要直接从 CLI 调用：
 
@@ -246,7 +248,7 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 当 scoped npm wrapper 发布后，Node 侧的目标入口会是：
 
 ```bash
-npx @michengliang/docutouch
+npx @michengliang/docutouch --help
 npm install -g @michengliang/docutouch
 ```
 

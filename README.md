@@ -189,14 +189,16 @@ Once a GitHub Release exists, you can also download the platform binary directly
 Start the stdio MCP server:
 
 ```bash
+cargo run -p docutouch-server -- serve
+```
+
+If you run the bare command instead:
+
+```bash
 cargo run -p docutouch-server
 ```
 
-Or explicitly:
-
-```bash
-cargo run -p docutouch-server -- serve
-```
+it now prints CLI usage. Use `serve` when you want the stdio MCP server.
 
 Call the CLI directly:
 
@@ -246,7 +248,7 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 Once the scoped npm wrapper is published, the intended Node-side entry points are:
 
 ```bash
-npx @michengliang/docutouch
+npx @michengliang/docutouch --help
 npm install -g @michengliang/docutouch
 ```
 

@@ -19,32 +19,34 @@ cargo build
 如果你不想从源码构建，也可以直接使用：
 
 - GitHub Releases: `https://github.com/MichengLiang/docutouch/releases`
-- npm launcher: `npx @michengliang/docutouch`
+- npm launcher: `npx @michengliang/docutouch --help`
 
 如果当前 tag 已经有 GitHub Release，你也可以直接下载对应平台的 release binary，而不是先从 source build 开始。
 
 ## 启动 stdio MCP server
 
 ```bash
+cargo run -p docutouch-server -- serve
+```
+
+如果直接运行裸命令：
+
+```bash
 cargo run -p docutouch-server
 ```
 
-也可以显式写成：
-
-```bash
-cargo run -p docutouch-server -- serve
-```
+当前会打印 CLI usage；真正启动 stdio MCP server 请使用 `serve`。
 
 如果要在启动时提供默认 workspace：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server -- serve
 ```
 
 如果你希望 server process 默认把 `apply_patch` 的 numbered-evidence mode 设为 `full`，可以再加：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server -- serve
 ```
 
 ## 最小 MCP 配置示例

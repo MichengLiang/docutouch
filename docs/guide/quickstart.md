@@ -19,34 +19,35 @@ cargo build
 如果你不想从源码构建，也可以直接使用：
 
 - GitHub Releases: `https://github.com/MichengLiang/docutouch/releases`
-- npm launcher: `npx docutouch --help`
+- npm launcher: `npx docutouch help`
 
 如果当前 tag 已经有 GitHub Release，你也可以直接下载对应平台的 release binary，而不是先从 source build 开始。
 
 ## 启动 stdio MCP server
 
 ```bash
-cargo run -p docutouch-server -- serve
-```
-
-如果直接运行裸命令：
-
-```bash
 cargo run -p docutouch-server
 ```
 
-当前会打印 CLI usage；真正启动 stdio MCP server 请使用 `serve`。
+如果你希望显式写出 server alias：
+
+```bash
+cargo run -p docutouch-server -- mcp
+cargo run -p docutouch-server -- serve
+```
+
+裸命令现在就是主 stdio MCP server 入口。
 
 如果要在启动时提供默认 workspace：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server -- serve
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
 ```
 
 如果你希望 server process 默认把 `apply_patch` 的 numbered-evidence mode 设为 `full`，可以再加：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server -- serve
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server
 ```
 
 ## 最小 MCP 配置示例
@@ -87,7 +88,7 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 当 npm wrapper `docutouch` 首次发布后，也可以用：
 
 ```bash
-npx docutouch
+npx docutouch list docutouch-server/src
 ```
 
 ## 一个最短的 patch 调用

@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | design lock | closed | CLI 被锁定为 adapter，而不是第二套语义层 |
 | shared-layer audit and extraction | closed | transport-agnostic 语义被下沉到共享层 |
-| CLI surface implementation | closed | `list/read/search/patch` surface 已落地 |
+| CLI surface implementation | closed | 顶层 `list/read/search/patch/splice` surface 已落地，`cli <subcommand>` 可作为可选别名保留 |
 | parity and regression testing | closed | CLI/MCP parity 已进入自动化验证 |
 | documentation and UX polish | closed | adapter vocabulary 与 CWD anchoring 已对齐 |
 | acceptance review | closed | 当前 documented parity scope 已被接受 |

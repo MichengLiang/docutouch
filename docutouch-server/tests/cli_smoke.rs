@@ -126,15 +126,60 @@ fn run_cli(cwd: &std::path::Path, args: &[&str], stdin: Option<&str>) -> anyhow:
     support::run_cli(cwd, args, stdin)
 }
 
-#[test]
-fn cli_without_args_prints_usage_instead_of_starting_server() -> anyhow::Result<()> {
+#[tokio::test]
+async fn cli_without_args_starts_server() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
-    let output = run_cli(temp.path(), &[], None)?;
-    assert!(output.status.success());
-    let stdout = utf8(&output.stdout);
-    assert!(stdout.contains("Usage:"));
-    assert!(stdout.contains("serve"));
-    assert!(utf8(&output.stderr).is_empty());
+    std::fs::write(temp.path().join("seed.txt"), "seed\n")?;
+
+    with_server_client!(temp.path(), client, {
+        let result = timeout_result(
+            "read_file through bare docutouch server entry in cli_smoke",
+            client.call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": temp.path().join("seed.txt")
+                }))),
+                task: None,
+            }),
+        )
+        .await?;
+
+        assert_eq!(result.content[0].as_text().unwrap().text, "seed\n");
+        Ok(())
+    })?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_serve_alias_starts_server() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("seed.txt"), "seed\n")?;
+
+    let mut smoke_client = Some(
+        ().serve(support::new_smoke_transport_with(temp.path(), |cmd| {
+            cmd.arg("serve");
+        })?)
+        .await?,
+    );
+    let result = timeout_result("read_file through serve alias in cli_smoke", async {
+        let client = smoke_client.as_ref().expect("smoke client");
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": temp.path().join("seed.txt")
+                }))),
+                task: None,
+            })
+            .await?;
+        anyhow::Ok(result)
+    })
+    .await?;
+    drop(smoke_client.take());
+
+    assert_eq!(result.content[0].as_text().unwrap().text, "seed\n");
     Ok(())
 }
 
@@ -157,7 +202,11 @@ fn run_cli_with_env(
     let mut child = command.spawn()?;
     if let Some(input) = stdin {
         use std::io::Write as _;
-        child.stdin.as_mut().expect("stdin pipe").write_all(input.as_bytes())?;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin pipe")
+            .write_all(input.as_bytes())?;
     }
     child.stdin.take();
     support::wait_with_output_timeout(child, "docutouch CLI child with env in cli_smoke")
@@ -275,7 +324,7 @@ async fn cli_search_preview_matches_mcp_output() -> anyhow::Result<()> {
     )
     .await?;
 
-    let cli_output = run_cli(cli_temp.path(), &["search", "alpha", "src"], None)?;
+    let cli_output = run_cli(cli_temp.path(), &["cli", "search", "alpha", "src"], None)?;
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stderr).is_empty());
@@ -325,7 +374,11 @@ async fn cli_patch_success_matches_mcp_output_and_reads_stdin() -> anyhow::Resul
     )
     .await?;
 
-    let cli_output = run_cli(cli_temp.path(), &["patch"], Some(patch_success_text()))?;
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["cli", "patch"],
+        Some(patch_success_text()),
+    )?;
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stderr).is_empty());
@@ -348,14 +401,21 @@ fn cli_patch_flag_full_enables_dense_numbered_old_side_evidence() -> anyhow::Res
     )?;
 
     assert!(cli_output.status.success());
-    assert_eq!(utf8(&cli_output.stdout), "Success. Updated the following files:\nM app.py");
+    assert_eq!(
+        utf8(&cli_output.stdout),
+        "Success. Updated the following files:\nM app.py"
+    );
     assert!(utf8(&cli_output.stderr).is_empty());
-    assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("app.py"))?,
+        "value = 2\n"
+    );
     Ok(())
 }
 
 #[test]
-fn cli_patch_flag_overrides_full_env_with_header_only_for_literal_numbered_text() -> anyhow::Result<()> {
+fn cli_patch_flag_overrides_full_env_with_header_only_for_literal_numbered_text()
+-> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("app.py"), "121 | value = 1\n")?;
     let patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-121 | value = 1\n+value = 2\n*** End Patch\n";
@@ -368,7 +428,10 @@ fn cli_patch_flag_overrides_full_env_with_header_only_for_literal_numbered_text(
     )?;
 
     assert!(cli_output.status.success());
-    assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
+    assert_eq!(
+        std::fs::read_to_string(temp.path().join("app.py"))?,
+        "value = 2\n"
+    );
     Ok(())
 }
 
@@ -386,7 +449,11 @@ async fn cli_splice_success_matches_mcp_output_and_reads_stdin() -> anyhow::Resu
     )
     .await?;
 
-    let cli_output = run_cli(cli_temp.path(), &["splice"], Some(splice_success_text()))?;
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["cli", "splice"],
+        Some(splice_success_text()),
+    )?;
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stderr).is_empty());
@@ -784,8 +851,8 @@ fn cli_patch_file_failure_preserves_original_patch_file_path() -> anyhow::Result
 }
 
 #[test]
-fn cli_failed_patch_artifact_recovers_workspace_anchor_outside_invocation_cwd(
-) -> anyhow::Result<()> {
+fn cli_failed_patch_artifact_recovers_workspace_anchor_outside_invocation_cwd() -> anyhow::Result<()>
+{
     let workspace = tempfile::tempdir()?;
     let invocation_cwd = tempfile::tempdir()?;
     std::fs::create_dir_all(workspace.path().join("src"))?;
@@ -826,8 +893,8 @@ fn cli_failed_patch_artifact_recovers_workspace_anchor_outside_invocation_cwd(
 }
 
 #[test]
-fn cli_regular_patch_file_keeps_invocation_cwd_anchor_outside_patch_directory(
-) -> anyhow::Result<()> {
+fn cli_regular_patch_file_keeps_invocation_cwd_anchor_outside_patch_directory() -> anyhow::Result<()>
+{
     let patch_owner = tempfile::tempdir()?;
     let invocation_cwd = tempfile::tempdir()?;
     let patch_path = patch_owner.path().join("input.patch");
@@ -906,7 +973,7 @@ fn cli_read_uses_cwd_as_workspace_anchor() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("notes.txt"), "line one\nline two\n")?;
 
-    let output = run_cli(temp.path(), &["read", "notes.txt"], None)?;
+    let output = run_cli(temp.path(), &["cli", "read", "notes.txt"], None)?;
     assert!(output.status.success());
     assert_eq!(utf8(&output.stdout), "line one\nline two\n");
     assert!(utf8(&output.stderr).is_empty());

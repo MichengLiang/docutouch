@@ -20,6 +20,6 @@ DocuTouch 是一组面向 LLM coding agents 的结构化文件工具。
 5. 应用结构化修改
 6. 接收可诊断反馈
 
-DocuTouch 主要通过 MCP / injection 这类代理工具接入方式使用。CLI 继续保留，并且为 repair loop 提供 stdin/file 两种进入方式。
+DocuTouch 主要通过 MCP / injection 这类代理工具接入方式使用。裸 `docutouch` 命令直接进入 stdio MCP server；CLI 继续保留，并且通过 `docutouch patch`、`docutouch read` 这类顶层子命令为 repair loop 提供 stdin/file 两种进入方式。
 
 如果你想先看一条可执行的启动路径，继续阅读 [quickstart.md](quickstart.md)。如果你想先看所有公开工具，继续阅读 [tool-surfaces.md](tool-surfaces.md)。

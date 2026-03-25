@@ -5,25 +5,26 @@
 它提供两种入口：
 
 - 无参数启动：stdio MCP server
-- 带子命令启动：CLI adapter
+- 顶层工具子命令：本地 CLI adapter
+- `mcp` / `serve`：显式 server alias
 
 ## 启动方式
-
-cargo run -p docutouch-server -- serve
-```
-
-如果直接运行裸命令：
 
 ```bash
 cargo run -p docutouch-server
 ```
 
-当前会打印 CLI usage；真正启动 stdio MCP server 请使用 `serve`。
+如果你想显式写出同一入口的 alias，也可以：
+
+```bash
+cargo run -p docutouch-server -- mcp
+cargo run -p docutouch-server -- serve
+```
 
 如果你使用 npm launcher，也可以：
 
 ```bash
-npx docutouch serve
+npx docutouch
 ```
 
 ## 默认 workspace
@@ -31,13 +32,13 @@ npx docutouch serve
 如果你希望在启动时预设默认 workspace：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server -- serve
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
 ```
 
 如果你还希望 server process 默认把 `apply_patch` 的 numbered-evidence mode 设为 `full`：
 
 ```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server -- serve
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE=full cargo run -p docutouch-server
 ```
 
 相对路径的解析优先使用显式 `set_workspace`，其次使用启动时有效的 `DOCUTOUCH_DEFAULT_WORKSPACE`。

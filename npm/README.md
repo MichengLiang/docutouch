@@ -16,12 +16,19 @@ Other platforms fail with a clear error message.
 Run without a global install:
 
 ```bash
-npx docutouch --help
+npx docutouch help
 ```
 
-To start the stdio MCP server explicitly:
+To start the stdio MCP server:
 
 ```bash
+npx docutouch
+```
+
+Explicit aliases remain available:
+
+```bash
+npx docutouch mcp
 npx docutouch serve
 ```
 
@@ -29,7 +36,7 @@ Or install globally:
 
 ```bash
 npm install -g docutouch
-docutouch --help
+docutouch help
 ```
 
 ## What It Downloads
@@ -50,3 +57,4 @@ Expected assets:
 - The first run needs network access so the launcher can fetch the binary.
 - The downloaded binary is cached inside the installed package under `vendor/`.
 - Environment variables such as `DOCUTOUCH_DEFAULT_WORKSPACE` and `DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE` still apply to the spawned binary.
+- The bare `docutouch` command starts the stdio MCP server; top-level subcommands such as `docutouch patch` and `docutouch search` remain the primary local CLI surface.

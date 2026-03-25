@@ -23,16 +23,17 @@
 启动 stdio MCP server：
 
 ```bash
-cargo run -p docutouch-server -- serve
-```
-
-如果直接运行裸命令：
-
-```bash
 cargo run -p docutouch-server
 ```
 
-当前会打印 CLI usage，而不是直接进入 server mode。
+显式 server alias 也仍然可用：
+
+```bash
+cargo run -p docutouch-server -- mcp
+cargo run -p docutouch-server -- serve
+```
+
+裸命令现在就是默认 stdio MCP server 入口。
 
 直接调用 CLI：
 

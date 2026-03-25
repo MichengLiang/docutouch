@@ -189,16 +189,17 @@ Once a GitHub Release exists, you can also download the platform binary directly
 Start the stdio MCP server:
 
 ```bash
-cargo run -p docutouch-server -- serve
-```
-
-If you run the bare command instead:
-
-```bash
 cargo run -p docutouch-server
 ```
 
-it now prints CLI usage. Use `serve` when you want the stdio MCP server.
+If you want an explicit alias, these remain valid:
+
+```bash
+cargo run -p docutouch-server -- mcp
+cargo run -p docutouch-server -- serve
+```
+
+The bare command is now the primary stdio MCP server entrypoint.
 
 Call the CLI directly:
 
@@ -248,11 +249,11 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 Once the scoped npm wrapper is published, the intended Node-side entry points are:
 
 ```bash
-npx docutouch --help
+npx docutouch help
 npm install -g docutouch
 ```
 
-The npm wrapper is designed as a thin launcher over GitHub Release binaries rather than a second implementation of the tool.
+The npm wrapper is designed as a thin launcher over GitHub Release binaries rather than a second implementation of the tool. The bare `docutouch` command starts the stdio MCP server; top-level subcommands such as `docutouch patch` and `docutouch search` remain the primary local CLI surface.
 
 For `.docutouch/failed-patches/*.patch` repair artifacts, the CLI restores the owning workspace anchor automatically.
 

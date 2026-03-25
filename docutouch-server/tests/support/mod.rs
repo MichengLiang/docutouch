@@ -72,7 +72,6 @@ pub fn new_smoke_transport_with(
 ) -> anyhow::Result<TokioChildProcess> {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_docutouch"));
     command.current_dir(cwd);
-    command.arg("serve");
     command.kill_on_drop(true);
     configure(&mut command);
     Ok(TokioChildProcess::new(command)?)

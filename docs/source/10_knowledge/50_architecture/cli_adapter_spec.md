@@ -46,6 +46,7 @@ CLI adapter 的 architecture position 是：
 - 复用 shared semantic core；
 - 为命令行 transport 提供 invocation adapter；
 - 避免在 server 与 CLI 之间形成双份产品语义。
+- 保持裸 `docutouch` 命令保留给 stdio MCP server 主入口。
 
 ## Core Architecture Commitments
 
@@ -105,6 +106,7 @@ CLI subcommands 应与 MCP tool family 保持一一对应的概念映射：
 - `docutouch read`
 - `docutouch search`
 - `docutouch patch`
+- `docutouch splice`
 
 这不是要求 CLI 长得像 JSON，而是要求 mental model 不漂移。
 
@@ -127,6 +129,12 @@ CLI parity test 不是上线后的 polish，而是 architecture completeness 的
 ## Command-Surface Boundary
 
 accepted command surface 只承载统一产品面的命令行投影。
+
+在顶层命令关系上，accepted contract 还包括：
+
+- 裸 `docutouch` 命令启动 stdio MCP server；
+- 顶层工具子命令承载正式本地 CLI surface；
+- `cli <subcommand>` 可以作为可选别名保留，但不应反向定义主心智模型。
 
 因此 CLI 不应：
 

@@ -71,8 +71,7 @@ pub async fn dispatch_from_env() -> Result<Dispatch> {
         .next()
         .unwrap_or_else(|| "docutouch".to_string());
     if args.is_empty() {
-        write_stdout(&usage(&program))?;
-        return Ok(Dispatch::Exit(0));
+        return Ok(Dispatch::RunServer);
     }
 
     match args[0].as_str() {
@@ -86,6 +85,22 @@ pub async fn dispatch_from_env() -> Result<Dispatch> {
                 ))?;
                 Ok(Dispatch::Exit(2))
             }
+        }
+        "mcp" => parse_mcp_dispatch(&program, &args[1..]),
+        "cli" => {
+            if args.len() == 1 {
+                write_stdout(&usage(&program))?;
+                return Ok(Dispatch::Exit(0));
+            }
+            let command = match parse_command(&args[1..]) {
+                Ok(command) => command,
+                Err(message) => {
+                    write_stderr(&format!("{message}\n\n{}", usage(&program)))?;
+                    return Ok(Dispatch::Exit(2));
+                }
+            };
+            let exit_code = run_command(command).await?;
+            Ok(Dispatch::Exit(exit_code))
         }
         "help" | "--help" | "-h" => {
             write_stdout(&usage(&program))?;
@@ -101,6 +116,24 @@ pub async fn dispatch_from_env() -> Result<Dispatch> {
             };
             let exit_code = run_command(command).await?;
             Ok(Dispatch::Exit(exit_code))
+        }
+    }
+}
+
+fn parse_mcp_dispatch(program: &str, args: &[String]) -> Result<Dispatch> {
+    match args {
+        [] => Ok(Dispatch::RunServer),
+        [subcommand] if subcommand == "serve" => Ok(Dispatch::RunServer),
+        [subcommand] if subcommand == "help" || subcommand == "--help" || subcommand == "-h" => {
+            write_stdout(&usage(program))?;
+            Ok(Dispatch::Exit(0))
+        }
+        _ => {
+            write_stderr(&format!(
+                "mcp only accepts an optional `serve` alias\n\n{}",
+                usage(program)
+            ))?;
+            Ok(Dispatch::Exit(2))
         }
     }
 }
@@ -457,7 +490,11 @@ fn infer_patch_execution_anchor(cwd: &Path, patch_source_path: Option<&Path>) ->
 
 fn failed_patch_workspace_root(path: &Path) -> Option<PathBuf> {
     let failed_patches_dir = path.parent()?;
-    if failed_patches_dir.file_name().and_then(|name| name.to_str()) != Some("failed-patches") {
+    if failed_patches_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some("failed-patches")
+    {
         return None;
     }
     let docutouch_dir = failed_patches_dir.parent()?;
@@ -587,7 +624,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Show this help\n  {program} serve          Start the stdio MCP server\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n\nNotes:\n  - Running `{program}` with no subcommand prints help; use `{program} serve` to start the stdio MCP server.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `patch`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 
@@ -608,9 +645,10 @@ fn write_stderr(message: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        failed_patch_workspace_root, infer_patch_execution_anchor, parse_optional_transport_file_arg,
-        parse_patch_command, parse_splice_command, read_transport_text, resolve_cli_path,
-        resolve_transport_source_path, transport_source_from_path,
+        failed_patch_workspace_root, infer_patch_execution_anchor,
+        parse_optional_transport_file_arg, parse_patch_command, parse_splice_command,
+        read_transport_text, resolve_cli_path, resolve_transport_source_path,
+        transport_source_from_path,
     };
     use crate::patch_adapter::PatchNumberedEvidenceMode;
     use crate::transport_shell::TransportSourceProvenance;
@@ -637,7 +675,10 @@ mod tests {
         .expect("patch parse should succeed");
 
         assert_eq!(patch.patch_file.as_deref(), Some("input.patch"));
-        assert_eq!(patch.numbered_evidence_mode, Some(PatchNumberedEvidenceMode::Full));
+        assert_eq!(
+            patch.numbered_evidence_mode,
+            Some(PatchNumberedEvidenceMode::Full)
+        );
     }
 
     #[test]

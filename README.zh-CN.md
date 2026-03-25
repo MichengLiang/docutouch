@@ -189,16 +189,17 @@ docutouch
 启动 stdio MCP server：
 
 ```bash
-cargo run -p docutouch-server -- serve
-```
-
-如果直接运行裸命令：
-
-```bash
 cargo run -p docutouch-server
 ```
 
-当前会打印 CLI usage；真正启动 stdio MCP server 请使用 `serve`。
+如果你想显式写出别名，这两种也仍然可用：
+
+```bash
+cargo run -p docutouch-server -- mcp
+cargo run -p docutouch-server -- serve
+```
+
+现在裸命令本身就是主 stdio MCP server 入口。
 
 如果要直接从 CLI 调用：
 
@@ -248,11 +249,11 @@ cat retry.patch | cargo run -p docutouch-server -- patch
 当 scoped npm wrapper 发布后，Node 侧的目标入口会是：
 
 ```bash
-npx docutouch --help
+npx docutouch help
 npm install -g docutouch
 ```
 
-这个 npm 包只是一个薄 launcher，会去调用 GitHub Release 的二进制，而不是再做第二份实现。
+这个 npm 包只是一个薄 launcher，会去调用 GitHub Release 的二进制，而不是再做第二份实现。裸 `docutouch` 命令直接启动 stdio MCP server；`docutouch patch`、`docutouch search` 这类顶层子命令继续作为正式本地 CLI surface 保留。
 
 对 `.docutouch/failed-patches/*.patch` 这类 repair artifact file，CLI 会恢复它所属的 workspace anchor。
 

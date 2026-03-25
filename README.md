@@ -211,15 +211,37 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 
 ## MCP Config Example
 
-Minimal stdio MCP server config:
+For hosts that use the common stdio MCP config shape (`mcpServers -> name -> command / args / env`), prefer pointing directly at the compiled binary:
 
 ```json
 {
-  "command": "cargo",
-  "args": ["run", "-q", "-p", "docutouch-server"],
-  "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
-    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  "mcpServers": {
+    "docutouch": {
+      "command": "/absolute/path/to/docutouch",
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
+  }
+}
+```
+
+On Windows, `command` will typically point to `docutouch.exe`.
+
+If you are still iterating from source, a development config can continue to use `cargo run`:
+
+```json
+{
+  "mcpServers": {
+    "docutouch": {
+      "command": "cargo",
+      "args": ["run", "-q", "-p", "docutouch-server"],
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
   }
 }
 ```

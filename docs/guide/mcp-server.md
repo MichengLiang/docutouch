@@ -45,13 +45,37 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 
 ## 最小配置示例
 
+如果你的宿主采用常见的 stdio MCP 配置格式，推荐直接指向编译好的二进制：
+
 ```json
 {
-  "command": "cargo",
-  "args": ["run", "-q", "-p", "docutouch-server"],
-  "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
-    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  "mcpServers": {
+    "docutouch": {
+      "command": "/absolute/path/to/docutouch",
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
+  }
+}
+```
+
+在 Windows 上，`command` 通常会是 `C:\\...\\docutouch.exe`。
+
+如果你还在源码态调试，也可以继续用 `cargo run`：
+
+```json
+{
+  "mcpServers": {
+    "docutouch": {
+      "command": "cargo",
+      "args": ["run", "-q", "-p", "docutouch-server"],
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
   }
 }
 ```
@@ -60,11 +84,15 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 
 ```json
 {
-  "command": "npx",
-  "args": ["-y", "docutouch"],
-  "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
-    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  "mcpServers": {
+    "docutouch": {
+      "command": "npx",
+      "args": ["-y", "docutouch"],
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
   }
 }
 ```

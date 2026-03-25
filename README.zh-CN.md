@@ -211,15 +211,37 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 
 ## MCP 配置示例
 
-下面是一个最小的 stdio MCP server 配置示例：
+对于采用常见 stdio MCP 配置形态（`mcpServers -> 名称 -> command / args / env`）的宿主，推荐直接指向编译好的二进制：
 
 ```json
 {
-  "command": "cargo",
-  "args": ["run", "-q", "-p", "docutouch-server"],
-  "env": {
-    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
-    "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+  "mcpServers": {
+    "docutouch": {
+      "command": "/absolute/path/to/docutouch",
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
+  }
+}
+```
+
+在 Windows 上，`command` 通常会指向 `docutouch.exe`。
+
+如果你还在源码态联调，也可以继续使用 `cargo run` 作为开发配置：
+
+```json
+{
+  "mcpServers": {
+    "docutouch": {
+      "command": "cargo",
+      "args": ["run", "-q", "-p", "docutouch-server"],
+      "env": {
+        "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project",
+        "DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE": "header_only"
+      }
+    }
   }
 }
 ```

@@ -1,185 +1,275 @@
-# DocuTouch Rust 工作区
+# DocuTouch
 
-本目录是 DocuTouch 当前正在活跃开发的 Rust 实现版本。
+Language:
 
-当前的系统架构被组织为一个精简的 Rust MCP（模型上下文协议）技术栈：
+- English: `README.md`
+- 简体中文: `README.zh-CN.md`
 
-- `codex-apply-patch`
-  这是 OpenAI Codex `apply-patch` 核心逻辑的一个本地内嵌（vendored）分支。
-  其解析器与补丁写入模型严格保持与 Codex 基线一致。
-  但在当前仓库内，它同时被视为 DocuTouch 的 internal correctness substrate，
-  可以在保持 divergence disclosure 真实记录的前提下继续被抽取、重组与复用。
-  此处最核心的本地增强在于**更强大的文件组提交模型（file-group commit model）**：存在关联的文件操作将作为一个文件组进行原子化提交；而相互独立的文件组，即使其他组发生失败，依然可以成功被应用（Partial Success）。
+DocuTouch is a set of structural file tools for coding-agent workflows.
 
-- `docutouch-core`
-  供 MCP server 与 CLI adapter 共享的文件系统原语、搜索包装与 patch 文本渲染层。
-  当前主要职责：
-  - 生成 ASCII 树状目录列表
-  - 控制隐藏文件 / `.gitignore` 忽略文件的可见性（可选）
-  - 在目录输出中附加时间戳字段（可选）
-  - 支持单文件读取（可选附带基于 1 索引的绝对行号）
-  - 提供 `search_text` 的共享分组搜索与渲染语义
-  - 为 MCP 输出提供结构化的 `apply-patch` 执行结果映射
-  - 提供 CLI / MCP 共用的 patch success / failure 文本呈现
+The center of the project is two editing tools:
 
-- `docutouch-server`
-  纯粹使用 Rust 编写的工具服务入口 crate，同时提供 stdio MCP 和 CLI adapter。
-  当前对外暴露的 MCP 工具（Tools）：
-  - `set_workspace`（设置工作区）
-  - `list_directory`（列出目录）
-  - `read_file`（读取单文件）
-  - `search_text`（基于 ripgrep 的分组搜索）
-  - `apply_patch`（应用补丁）
-  - `apply_splice`（搬运既有文本跨度）
+- `apply_patch`
+- `apply_splice`
 
-  当前 `docutouch` 二进制在 transport 层提供两种入口：
-  - 无参数启动：stdio MCP server
-  - CLI subcommands：`docutouch list/read/search/patch/splice`
+`apply_patch` keeps the familiar patch-shaped input model and strengthens the execution path for agent repair loops. `apply_splice` treats already-existing text spans as first-class objects for copy, move, delete, and replace operations.
 
-  说明：
-  - `read_files` 已在 Wave 0.5 中完成退役，server / core 的可调用实现已删除。
-  - `docutouch-server/tool_docs/read_files.md` 现在作为退役记录保留，说明其历史目的、移除原因，以及为什么推荐重复调用普通 `read_file`。
-  - CLI adapter 仍然是次级形态；MCP / 注入式接口仍然是主产品 surface。
-  - `apply_patch` 与 `apply_splice` 现在通过 `docutouch-server` 内部的 shared transport shell 与各自 tool-specific adapter 在 CLI / MCP 之间复用同一条调用路径；`list/read/search` 仍以共享 core 语义为主。
+Support tools remain available around that workflow:
 
-## 当前输出约定 (Output Conventions)
+- `list_directory`
+- `read_file`
+- `search_text`
 
-- `list_directory` 始终保持以 ASCII 树作为主要形态。
-- 默认显示文件大小和总行数。
-- 时间戳显示默认为关闭，需通过 `timestamp_fields` 参数显式开启（opt-in）。
-- `read_file` 默认返回纯文本内容，并可选择开启基于 1 索引的行号显示。
-- 任一 sampled 参数出现时，`read_file` 会进入 sampled local inspection mode；缺省 sampled 参数会补稳定默认值，但不会隐式启用横向裁切。
-- 大量文件阅读应在编排层重复调用 `read_file`，保持文件边界稳定，并按需拆分 `line_range`；不再推荐把多文件正文聚合成一次巨型返回。
-- `search_text` 使用 ripgrep 做底层搜索，但把结果按文件分组返回，减少重复路径噪音，并让下一步 `read_file` 更自然。
+## When To Reach For DocuTouch
 
-- `apply_patch` 在成功路径保持 Codex 风格的 `A/M/D` 摘要。
-- `apply_patch` 在部分成功路径会同时报告：
-  - 已提交的 `committed changes`
-  - 失败的 `failed file groups`
-  - 每组失败的 error code、target、action / hunk 与 attempted `A/M/D`
+DocuTouch is a good fit when you need to:
 
-## 编译构建 (Build)
+- express file changes as a structured patch instead of a prose editing request
+- let correct, independent parts of a large patch land first while isolating the failing parts for repair
+- turn a failed patch into a direct repair loop instead of regenerating the whole thing
+- move, reuse, or reorganize already-existing code/text spans without re-authoring the full body
 
-如果你需要预先编译可执行文件（例如为了打包部署或语法检查），请使用以下指令：
+## `apply_patch`
 
-**1. 日常开发构建 (Debug 模式)**
-此模式编译速度最快，包含完整的调试符号，但未进行深度性能优化。
+`apply_patch` is the patch-shaped structural write tool. It still uses the familiar authored shape:
+
+```text
+*** Begin Patch
+*** Update File: src/app.py
+@@
+-print("Hi")
++print("Hello")
+*** End Patch
+```
+
+In this repository, the runtime behavior goes beyond a direct upstream carry-over. The most important additions are:
+
+- atomic commit inside connected file groups
+- `PartialSuccess` across disjoint groups
+- diagnostics designed for the next repair step
+- separate warning blocks on successful runs
+- a file-backed repair loop after patch failure
+
+That means a large patch does not need to be retried from scratch when one independent part fails. Committed and failed parts are reported separately.
+
+Warnings are rendered as explicit code-bearing blocks. For example:
+
+```text
+Success. Updated the following files:
+M notes.md
+
+warning[ADD_REPLACED_EXISTING_FILE]: Add File targeted an existing file and replaced its contents
+  --> notes.md
+  = help: prefer Update File when editing an existing file
+```
+
+Partial failure follows a repair-first shape. The headline starts with a stable error code:
+
+```text
+error[PARTIAL_UNIT_FAILURE]: patch partially applied
+```
+
+Then the output continues with the accounting needed for the next move:
+
+- `committed changes:`
+- `failed file groups:`
+- `failed_group[n]`
+- `attempted changes:`
+- `help:`
+
+The practical benefit is straightforward:
+
+- retry less of what already succeeded
+- resend less already-committed patch content
+- spend fewer tokens on repeated context
+- focus the next repair round on the failing group only
+
+The CLI is also shaped around that repair loop. `patch` accepts both stdin and patch files. For `.docutouch/failed-patches/*.patch` repair artifacts, the CLI restores the owning workspace anchor so you can edit and replay directly.
+
+See also:
+
+- [codex-apply-patch/README.md](codex-apply-patch/README.md)
+- [codex-apply-patch/UPSTREAM_LINEAGE.md](codex-apply-patch/UPSTREAM_LINEAGE.md)
+- [codex-apply-patch/LOCAL_DIVERGENCES.md](codex-apply-patch/LOCAL_DIVERGENCES.md)
+
+## `apply_splice`
+
+`apply_splice` is a separate tool with a different object boundary.
+
+- `apply_patch` operates on text differences and new text state
+- `apply_splice` operates on transfer relations between already-existing text spans
+
+Its authored surface declares:
+
+- where an existing span comes from
+- whether that span is `Copy`, `Move`, or `Delete Span`
+- whether the destination side is `Append`, `Insert Before`, `Insert After`, or `Replace`
+
+A minimal shape looks like this:
+
+```text
+*** Begin Splice
+*** Copy From File: source.py
+@@
+12 | def build_context(...)
+... source lines omitted ...
+19 |     return "strict"
+*** Append To File: target.py
+*** End Splice
+```
+
+The important properties are:
+
+- line-bearing selections
+- absolute line numbers plus visible content as double-lock validation
+- omission markers as first-class syntax
+- `Delete Span` as a first-class action
+- atomic connected mutation units
+
+This is useful for model workflows because the tool can express reuse and relocation of existing text without restating the entire body as newly authored text.
+
+## How To Choose Between The Two
+
+Use `apply_patch` when the job is “change this text into another text state.”
+
+Typical cases:
+
+- rewrite a function body
+- create a new file
+- delete a file
+- rename a file and change its contents
+
+Use `apply_splice` when the job is “copy, move, delete, or replace a span that already exists.”
+
+Typical cases:
+
+- move a helper from one file to another
+- copy an existing config block into a target file
+- delete a contiguous existing span
+- replace one existing block with another existing block
+
+## Installation And Prerequisites
+
+The current public installation path is source build.
+
+Prerequisites:
+
+- Rust toolchain
+- Cargo
+- `rg` (ripgrep) on PATH if you want to use `search_text`
+
+Build the workspace:
+
 ```bash
 cargo build
 ```
-*注：由于使用了 Cargo Workspace 机制，此命令会自动编译栈内的所有 crate（core, server, apply-patch）。主二进制产物将位于 `target/debug/docutouch`。*
 
-**2. 生产环境构建 (Release 模式)**
-如果你准备将此 MCP 服务器接入实际的大语言模型工作流，或进行高并发性能测试，**强烈建议使用发布模式**。Rust 编译器将执行极限优化，运行时性能会有数量级的提升。
-```bash
-cargo build --release
-```
-*注：编译过程耗时较长。最终的发布模式二进制产物将位于 `target/release/docutouch`，你可以直接将其拷贝到任何目标环境运行。*
+## Quick Start
 
-## 运行 Rust MCP 服务器
-
-在开发过程中，你可以直接使用 `cargo run` 边编译边运行：
+Start the stdio MCP server:
 
 ```bash
 cargo run -p docutouch-server
 ```
 
-也可以显式写成：
+Or explicitly:
 
 ```bash
 cargo run -p docutouch-server -- serve
 ```
 
-如果希望在 server 启动时预设一个默认 workspace，可以在启动前设置：
-
-```bash
-DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
-```
-
-路径优先级为：
-
-1. 显式调用 `set_workspace`
-2. 启动时存在且有效的 `DOCUTOUCH_DEFAULT_WORKSPACE`
-3. 否则 relative path 直接报错，并提示调用 `set_workspace` 或改用 absolute path
-
-说明：
-
-- `apply_patch` 不再把 server process cwd 当作语义上的默认 workspace。
-- absolute path 仍然始终可用。
-- 如果 `DOCUTOUCH_DEFAULT_WORKSPACE` 存在但无效，server 仍会启动，并把它视为“没有默认 workspace”。
-- 如果既没有显式 workspace，也没有有效的默认 workspace，那么相对路径 patch 会在 parse / path-resolution 阶段直接失败，并以内联 diagnostics 报告原因。此时应优先显式 `set_workspace`，或直接使用 absolute path。
-- `apply_patch` 不再写入 audit-shaped failure reports、secondary JSON sidecars 或 patch-run caches。
-- 当 patch 通过 inline 参数或 stdin 提供且执行失败时，运行时可以把 failed patch source 本身持久化到工作区隐藏目录，供后续模型修复读取。
-- patch 失败后的审计与回执仍优先依赖 Codex 宿主本身的 tool-call logs；持久化的 patch source 属于修复对象，不是第二套审计工件。
-
-## 运行 CLI Adapter
-
-`docutouch` CLI 是 MCP 工具面的 adapter，而不是第二套语义层。
-
-当前提供的子命令是：
-
-- `docutouch list`
-- `docutouch read`
-- `docutouch search`
-- `docutouch patch`
-- `docutouch splice`
-
-CLI 约定：
-
-- ordinary relative path 默认以当前进程 CWD 作为隐式 workspace anchor
-- absolute path 仍然始终可用
-- `search` 复用 MCP 的 grouped `preview/full` 输出语义
-- `patch` 复用 MCP 的 success / warning / failure diagnostics 语义
-- `patch` 在未提供 patch file 参数时，从 stdin 读取 patch 文本
-- `patch` 若接收到 `.docutouch/failed-patches/*.patch` 形式的 DocuTouch-owned failed patch artifact file，会从该 artifact 路径恢复 workspace anchor
-- `splice` 复用 MCP 的 diagnostics 语义，并在未提供 splice file 参数时，从 stdin 读取 splice 文本
-- 独立的 `apply_patch` 二进制继续保留；`docutouch patch` 是统一工具面的并存 adapter，而不是替代品
-
-示例：
+Call the CLI directly:
 
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
-cargo run -p docutouch-server -- read README.md --line-range 1:120 --sample-step 5
-cargo run -p docutouch-server -- read README.md --line-range 1:120 --sample-step 5 --sample-lines 2 --max-chars 80
-cargo run -p docutouch-server -- search apply_patch docutouch-server/src docutouch-core/src --view full
-cat fix.patch | cargo run -p docutouch-server -- patch
-cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
-Get-Content move.splice | cargo run -p docutouch-server -- splice
+cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 ```
 
-## 测试 (Testing)
+## MCP Config Example
 
-针对 Core 与 MCP Server 的回归测试：
+Minimal stdio MCP server config:
+
+```json
+{
+  "command": "cargo",
+  "args": ["run", "-q", "-p", "docutouch-server"],
+  "env": {
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project"
+  }
+}
+```
+
+If your host will call `set_workspace` immediately after connecting, `DOCUTOUCH_DEFAULT_WORKSPACE` can be omitted.
+
+## CLI Repair Loop
+
+`patch` accepts both stdin and patch files. A typical repair loop is:
+
+```bash
+cargo run -p docutouch-server -- patch .docutouch/failed-patches/1712345678901-0.patch
+```
+
+Or replay from stdin after editing the patch text:
+
+```bash
+cat retry.patch | cargo run -p docutouch-server -- patch
+```
+
+For `.docutouch/failed-patches/*.patch` repair artifacts, the CLI restores the owning workspace anchor automatically.
+
+## Support Tools
+
+- `list_directory`
+  Builds an ASCII tree view of the workspace.
+
+- `read_file`
+  Reads one file at a time, with line ranges, line numbers, and sampled inspection.
+
+- `search_text`
+  Wraps ripgrep and returns grouped file-oriented search results.
+
+## Documentation
+
+- [docs/README.md](docs/README.md)
+  Documentation entry.
+
+- [docs/guide/README.md](docs/guide/README.md)
+  Reader-facing guide entry.
+
+- [docutouch-server/README.md](docutouch-server/README.md)
+  `docutouch-server` package entry.
+
+- [docutouch-core/README.md](docutouch-core/README.md)
+  `docutouch-core` package entry.
+
+- [codex-apply-patch/README.md](codex-apply-patch/README.md)
+  `codex-apply-patch` package entry.
+
+## Project Status
+
+The core tool surfaces are usable today, while the public-facing docs and external presentation are still being tightened.
+
+## Contributing
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+  Contribution guide and documentation expectations.
+
+## Tests
+
+Run the core/server checks:
 
 ```bash
 cargo test -p docutouch-core -p docutouch-server
 ```
 
-针对内嵌的 `apply-patch` 分支的回归测试：
+Run the vendored patch engine tests:
 
 ```bash
 cd codex-apply-patch
 cargo test
 ```
 
-## 上游基线说明 (Upstream Baseline Notes)
+## License
 
-对于内嵌的 `codex-apply-patch` 分支，我们保留了显式的本地追踪说明文件：
-
-- `codex-apply-patch/UPSTREAM_BASELINE.md`
-- `codex-apply-patch/DOCUTOUCH_ENHANCEMENTS.md`
-
-这两个文件详细记录了当前工作区所遵循的上游 Codex 基线版本，以及我们在本地运行时层面对哪些行为进行了刻意增强。
-
-## 维护文档 (Maintainer Docs)
-
-为了避免关键背景信息散落在即时聊天记录中，工作区内长期维护所需的定位、规则、计划与专项设计记录统一沉淀在：
-
-- `docs/README.md`
-- `docs/product_positioning.md`
-- `docs/maintainer_guide.md`
-- `docs/roadmap.md`
-- `docs/apply_patch_semantics_plan.md`
-
-如果你准备继续维护这个工作区，建议先从 `docs/README.md` 开始阅读。
+Apache-2.0.

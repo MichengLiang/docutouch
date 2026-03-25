@@ -1,0 +1,55 @@
+# MCP Server
+
+`docutouch-server` 是当前工作区里的工具服务入口 crate。
+
+它提供两种入口：
+
+- 无参数启动：stdio MCP server
+- 带子命令启动：CLI adapter
+
+## 启动方式
+
+```bash
+cargo run -p docutouch-server
+```
+
+或：
+
+```bash
+cargo run -p docutouch-server -- serve
+```
+
+## 默认 workspace
+
+如果你希望在启动时预设默认 workspace：
+
+```bash
+DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project cargo run -p docutouch-server
+```
+
+相对路径的解析优先使用显式 `set_workspace`，其次使用启动时有效的 `DOCUTOUCH_DEFAULT_WORKSPACE`。
+
+## 最小配置示例
+
+```json
+{
+  "command": "cargo",
+  "args": ["run", "-q", "-p", "docutouch-server"],
+  "env": {
+    "DOCUTOUCH_DEFAULT_WORKSPACE": "/absolute/path/to/project"
+  }
+}
+```
+
+如果你的宿主会在连接后立刻调用 `set_workspace`，也可以不设置默认 workspace。
+
+## 公开工具面
+
+- `set_workspace`
+- `list_directory`
+- `read_file`
+- `search_text`
+- `apply_patch`
+- `apply_splice`
+
+模块级说明见 [../../docutouch-server/README.md](../../docutouch-server/README.md)。

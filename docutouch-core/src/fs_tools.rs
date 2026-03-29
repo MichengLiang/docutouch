@@ -76,24 +76,23 @@ pub struct ReadFileResult {
 pub struct ReadFileOptions {
     pub line_range: Option<(usize, usize)>,
     pub show_line_numbers: bool,
+    pub max_chars: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ReadFileSampledViewOptions {
     pub sample_step: usize,
     pub sample_lines: usize,
-    pub max_chars: Option<usize>,
 }
 
 pub fn normalize_sampled_view_options(
     sample_step: Option<usize>,
     sample_lines: Option<usize>,
-    max_chars: Option<usize>,
 ) -> Result<Option<ReadFileSampledViewOptions>, String> {
     const DEFAULT_SAMPLE_STEP: usize = 5;
     const DEFAULT_SAMPLE_LINES: usize = 2;
 
-    if sample_step.is_none() && sample_lines.is_none() && max_chars.is_none() {
+    if sample_step.is_none() && sample_lines.is_none() {
         return Ok(None);
     }
 
@@ -110,7 +109,6 @@ pub fn normalize_sampled_view_options(
     Ok(Some(ReadFileSampledViewOptions {
         sample_step,
         sample_lines,
-        max_chars,
     }))
 }
 
@@ -215,8 +213,8 @@ pub fn read_file_with_sampled_view(
     if let Some(sampled_view) = sampled_view.as_ref() {
         validate_sampled_view_options(sampled_view).map_err(std::io::Error::other)?;
     }
-    let rendered =
-        render_read_file_content(&sliced, options.show_line_numbers, sampled_view.as_ref());
+    validate_max_chars(options.max_chars).map_err(std::io::Error::other)?;
+    let rendered = render_read_file_content(&sliced, &options, sampled_view.as_ref());
 
     Ok(ReadFileResult {
         content: rendered,
@@ -493,45 +491,70 @@ fn validate_sampled_view_options(options: &ReadFileSampledViewOptions) -> Result
     if options.sample_lines >= options.sample_step {
         return Err("sampled view requires 1 <= sample_lines < sample_step".to_string());
     }
-    if options.max_chars == Some(0) {
-        return Err("sampled view requires max_chars >= 1".to_string());
+    Ok(())
+}
+
+fn validate_max_chars(max_chars: Option<usize>) -> Result<(), String> {
+    if max_chars == Some(0) {
+        return Err("read_file requires max_chars >= 1".to_string());
     }
     Ok(())
 }
 
 fn render_read_file_content(
     sliced: &SlicedContent,
-    show_line_numbers: bool,
+    options: &ReadFileOptions,
     sampled_view: Option<&ReadFileSampledViewOptions>,
 ) -> String {
     match sampled_view {
         Some(sampled_view) => render_sampled_view(
             &sliced.content,
             sliced.start_line,
-            show_line_numbers,
+            options.show_line_numbers,
+            options.max_chars,
             sampled_view,
         ),
-        None if show_line_numbers => render_with_line_numbers(&sliced.content, sliced.start_line),
-        None => sliced.content.clone(),
+        None => render_exact_view(
+            &sliced.content,
+            sliced.start_line,
+            options.show_line_numbers,
+            options.max_chars,
+        ),
     }
 }
 
-fn render_with_line_numbers(content: &str, start_line: usize) -> String {
+fn render_exact_view(
+    content: &str,
+    start_line: usize,
+    show_line_numbers: bool,
+    max_chars: Option<usize>,
+) -> String {
     if content.is_empty() {
         return String::new();
     }
-    let line_count = content.split_inclusive('\n').count();
-    let line_number_width = (start_line + line_count - 1).to_string().len();
-    content
-        .split_inclusive('\n')
+
+    let lines = content.split_inclusive('\n').collect::<Vec<_>>();
+    let line_number_width = if show_line_numbers {
+        (start_line + lines.len() - 1).to_string().len()
+    } else {
+        0
+    };
+
+    lines
+        .into_iter()
         .enumerate()
         .map(|(offset, line)| {
-            format!(
-                "{:>width$} | {}",
-                start_line + offset,
-                line,
-                width = line_number_width
-            )
+            let rendered_line = truncate_line(line, max_chars);
+            if show_line_numbers {
+                format!(
+                    "{:>width$} | {}",
+                    start_line + offset,
+                    rendered_line,
+                    width = line_number_width
+                )
+            } else {
+                rendered_line
+            }
         })
         .collect()
 }
@@ -540,6 +563,7 @@ fn render_sampled_view(
     content: &str,
     start_line: usize,
     show_line_numbers: bool,
+    max_chars: Option<usize>,
     options: &ReadFileSampledViewOptions,
 ) -> String {
     if content.is_empty() {
@@ -558,7 +582,7 @@ fn render_sampled_view(
     while block_start < lines.len() {
         let block_end = (block_start + options.sample_lines).min(lines.len());
         for index in block_start..block_end {
-            let rendered_line = truncate_sampled_line(lines[index], options.max_chars);
+            let rendered_line = truncate_line(lines[index], max_chars);
             if show_line_numbers {
                 rendered.push_str(&format!(
                     "{:>width$} | {}",
@@ -586,7 +610,7 @@ fn render_sampled_view(
     rendered
 }
 
-fn truncate_sampled_line(line: &str, max_chars: Option<usize>) -> String {
+fn truncate_line(line: &str, max_chars: Option<usize>) -> String {
     let Some(max_chars) = max_chars else {
         return line.to_string();
     };

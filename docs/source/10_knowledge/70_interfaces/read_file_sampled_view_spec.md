@@ -50,24 +50,27 @@ parameter semantics:
   - 仍然是 exact contiguous selector。
 - `sample_step`
   - 每 N 行开始一个 sampled block；
-  - 任一 sampled 参数出现时启用 sampled mode；
+  - 与 `sample_lines` 共同定义 sampled mode 的 cadence；
   - 仅当自身缺省时，默认基线值为 `5`。
 - `sample_lines`
   - 每个 sampled block 呈现的连续行数。
   - 缺省时，默认基线值为 `2`；若调用者显式给出较小的 `sample_step`，则会下调为满足校验约束的最接近默认值。
 - `max_chars`
-  - sampled mode 下每行最多显示的字符数；
+  - `read_file` 渲染时每行最多显示的字符数；
   - 超出部分必须显式标记为 inline truncation。
   - 仅在调用者显式提供时才启用 horizontal truncation；缺省时不做横向裁切。
+  - 当 sampled mode 未启用时，它作用于 exact contiguous read 的可见行。
+  - 当 sampled mode 启用时，它作用于 sampled lines。
 
 ## Activation And Defaulting Rule
 
-- 只要 `sample_step`、`sample_lines`、`max_chars` 中任意一个出现，就进入 sampled mode。
+- sampled mode 的 public activation surface 由 `sample_step` 与 `sample_lines` 组成。
+- 调用者提供其中任一参数时，另一参数按默认基线补值后共同形成 sampled mode。
 - sampled mode 下，缺省参数先补默认值，再进入 validation。
 - 默认基线组合为：
   - `sample_step = 5`
   - `sample_lines = 2`
-  - `max_chars` 缺省，即不做横向裁切
+  - `max_chars` 若显式提供，则同时作用于 sampled lines 的横向裁切
 - 为避免默认补值把请求补成无效形态，还需要遵守两条自适应规则：
   - 若调用者省略 `sample_step`、但给出了更大的 `sample_lines`，则 effective `sample_step` 至少提升到 `sample_lines + 1`；
   - 若调用者给出了较小的 `sample_step`、但省略 `sample_lines`，则 effective `sample_lines` 会收缩到严格小于 `sample_step` 的最近默认值。
@@ -147,7 +150,7 @@ Recommended set B: cheaper local check
 - `sample_lines = 2`
 - `max_chars = 80`
 
-它是启用 horizontal truncation 时的稳定推荐组合；partial sampled call 的默认基线并不会隐式补一个 `max_chars`。
+它是启用 horizontal truncation 时的稳定推荐组合；partial sampled call 的默认基线只定义 sampled cadence，行宽由调用者显式给定。
 
 Recommended set C: conservative local check
 

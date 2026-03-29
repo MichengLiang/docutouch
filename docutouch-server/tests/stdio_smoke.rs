@@ -1300,6 +1300,46 @@ async fn server_read_file_applies_defaults_for_partial_sampled_view_args() -> an
 }
 
 #[tokio::test]
+async fn server_read_file_max_chars_alone_keeps_exact_contiguous_range() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("notes.txt"),
+        "line 1 has more text here\nline 2 has more text here\nline 3 has more text here\nline 4 has more text here\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.txt",
+                    "line_range": "2:4",
+                    "show_line_numbers": true,
+                    "max_chars": 12
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert_eq!(
+            text,
+            "2 | line 2 has m...[13 chars omitted]\n3 | line 3 has m...[13 chars omitted]\n4 | line 4 has m...[13 chars omitted]\n"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_requires_workspace_for_relative_paths_without_default() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let invalid_workspace = temp.path().join("missing-workspace");

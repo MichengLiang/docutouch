@@ -435,22 +435,20 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
         Ok(path) => path,
         Err(error) => return emit_text_result(Err(error.to_string())),
     };
-    let sampled_view = match normalize_sampled_view_options(
-        command.sample_step,
-        command.sample_lines,
-        command.max_chars,
-    ) {
-        Ok(sampled_view) => sampled_view,
-        Err(message) => {
-            write_stderr(&message)?;
-            return Ok(1);
-        }
-    };
+    let sampled_view =
+        match normalize_sampled_view_options(command.sample_step, command.sample_lines) {
+            Ok(sampled_view) => sampled_view,
+            Err(message) => {
+                write_stderr(&message)?;
+                return Ok(1);
+            }
+        };
     let result = read_file_with_sampled_view(
         &path,
         ReadFileOptions {
             line_range: command.line_range,
             show_line_numbers: command.show_line_numbers,
+            max_chars: command.max_chars,
         },
         sampled_view,
     )

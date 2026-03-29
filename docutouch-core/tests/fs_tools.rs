@@ -43,6 +43,7 @@ fn read_file_clips_end_of_range_to_eof() {
         ReadFileOptions {
             line_range: Some((1, 5)),
             show_line_numbers: false,
+            max_chars: None,
         },
     )
     .expect("read file");
@@ -61,6 +62,7 @@ fn read_file_can_render_one_indexed_line_numbers() {
         ReadFileOptions {
             line_range: Some((2, 2)),
             show_line_numbers: true,
+            max_chars: None,
         },
     )
     .expect("read file");
@@ -84,6 +86,7 @@ fn read_file_aligns_line_numbers_to_widest_visible_line() {
         ReadFileOptions {
             line_range: Some((9, 12)),
             show_line_numbers: true,
+            max_chars: None,
         },
     )
     .expect("read file");
@@ -108,11 +111,11 @@ fn read_file_sampled_view_renders_vertical_omission_markers() {
         ReadFileOptions {
             line_range: Some((1, 8)),
             show_line_numbers: false,
+            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 5,
             sample_lines: 2,
-            max_chars: Some(80),
         }),
     )
     .expect("read file");
@@ -133,11 +136,11 @@ fn read_file_sampled_view_preserves_line_number_intent() {
         ReadFileOptions {
             line_range: Some((1, 3)),
             show_line_numbers: false,
+            max_chars: Some(5),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
             sample_lines: 1,
-            max_chars: Some(5),
         }),
     )
     .expect("read file");
@@ -162,11 +165,11 @@ fn read_file_sampled_view_can_render_line_numbers_when_requested() {
         ReadFileOptions {
             line_range: Some((9, 12)),
             show_line_numbers: true,
+            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 3,
             sample_lines: 2,
-            max_chars: Some(80),
         }),
     )
     .expect("read file");
@@ -188,11 +191,11 @@ fn read_file_sampled_view_rejects_non_sampled_shapes() {
         ReadFileOptions {
             line_range: Some((1, 2)),
             show_line_numbers: false,
+            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
             sample_lines: 2,
-            max_chars: Some(80),
         }),
     )
     .expect_err("sample_lines >= sample_step should fail");
@@ -214,16 +217,16 @@ fn read_file_sampled_view_rejects_zero_max_chars() {
         ReadFileOptions {
             line_range: Some((1, 2)),
             show_line_numbers: false,
+            max_chars: Some(0),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 3,
             sample_lines: 1,
-            max_chars: Some(0),
         }),
     )
     .expect_err("zero max_chars should fail");
 
-    assert_eq!(err.to_string(), "sampled view requires max_chars >= 1");
+    assert_eq!(err.to_string(), "read_file requires max_chars >= 1");
 }
 
 #[test]
@@ -237,11 +240,11 @@ fn read_file_sampled_view_does_not_truncate_when_max_chars_is_omitted() {
         ReadFileOptions {
             line_range: Some((1, 3)),
             show_line_numbers: false,
+            max_chars: None,
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
             sample_lines: 1,
-            max_chars: None,
         }),
     )
     .expect("read file");
@@ -251,24 +254,54 @@ fn read_file_sampled_view_does_not_truncate_when_max_chars_is_omitted() {
 
 #[test]
 fn normalize_sampled_view_options_uses_partial_defaults_without_truncation() {
-    let sampled = normalize_sampled_view_options(Some(5), None, None)
+    let sampled = normalize_sampled_view_options(Some(5), None)
         .expect("normalize should succeed")
         .expect("sampled view should be enabled");
 
     assert_eq!(sampled.sample_step, 5);
     assert_eq!(sampled.sample_lines, 2);
-    assert_eq!(sampled.max_chars, None);
 }
 
 #[test]
 fn normalize_sampled_view_options_expands_default_step_for_large_sample_lines() {
-    let sampled = normalize_sampled_view_options(None, Some(6), None)
+    let sampled = normalize_sampled_view_options(None, Some(6))
         .expect("normalize should succeed")
         .expect("sampled view should be enabled");
 
     assert_eq!(sampled.sample_step, 7);
     assert_eq!(sampled.sample_lines, 6);
-    assert_eq!(sampled.max_chars, None);
+}
+
+#[test]
+fn normalize_sampled_view_options_requires_sampling_parameters() {
+    let sampled = normalize_sampled_view_options(None, None).expect("normalize should succeed");
+
+    assert!(sampled.is_none());
+}
+
+#[test]
+fn read_file_max_chars_without_sampling_preserves_exact_line_range() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("notes.md");
+    let content = (1..=6)
+        .map(|line| format!("line {line} has more text here\n"))
+        .collect::<String>();
+    std::fs::write(&file_path, content).expect("write file");
+
+    let result = read_file(
+        &file_path,
+        ReadFileOptions {
+            line_range: Some((2, 4)),
+            show_line_numbers: true,
+            max_chars: Some(12),
+        },
+    )
+    .expect("read file");
+
+    assert_eq!(
+        result.content,
+        "2 | line 2 has m...[13 chars omitted]\n3 | line 3 has m...[13 chars omitted]\n4 | line 4 has m...[13 chars omitted]\n"
+    );
 }
 
 #[test]

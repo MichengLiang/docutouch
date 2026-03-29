@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
-const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取局部片段。也可结合 `sample_step`、`sample_lines`、`max_chars` 请求一个低成本局部检查视图。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
+const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取局部片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
 const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "基于 ripgrep 的文本搜索包装。保留原始终端 `rg` 作为无限制逃生口；当前工具服务于常见的 LLM 搜索路径，按文件分组返回结果，并区分 `preview` 概览视图与 `full` 全量分组视图。`path` / `path[]` 除了文件或目录 path 外，也接受形如 `pueue-log:<id>` 的 task-log handle，可直接搜索 `wait_pueue` 返回的日志句柄。`rg_args` 仅用于 search-behavior flags，如 `-F`、`-i`、`-g`、`-P`；render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。";
 const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
@@ -79,7 +79,7 @@ pub struct ReadFileArgs {
     #[serde(default)]
     pub show_line_numbers: bool,
     #[schemars(
-        description = "可选的 sampled inspection 步长。任一 sampled 参数出现时都会启用该视图；未提供的 sampled 参数会补默认值。局部检查常见推荐值为 3-5。"
+        description = "可选的 sampled inspection 步长。与 `sample_lines` 一起定义 sampled 视图；未提供的 sampled 参数会补默认值。局部检查常见推荐值为 3-5。"
     )]
     #[serde(default)]
     pub sample_step: Option<usize>,
@@ -89,7 +89,7 @@ pub struct ReadFileArgs {
     #[serde(default)]
     pub sample_lines: Option<usize>,
     #[schemars(
-        description = "可选的每行最大字符数。超过该值的行会以内联 `...[N chars omitted]` 形式显式裁切；未提供时不做横向裁切。"
+        description = "可选的每行最大字符数。它作用于当前读取结果中显示出来的每一行；超过该值的行会以内联 `...[N chars omitted]` 形式显式裁切；未提供时不做横向裁切。"
     )]
     #[serde(default)]
     pub max_chars: Option<usize>,
@@ -299,14 +299,14 @@ impl ToolService {
             resolve_read_surface_path(&args.relative_path, workspace.as_deref()).await?;
         let line_range =
             normalize_line_range(args.line_range).map_err(ServiceError::invalid_argument)?;
-        let sampled_view =
-            normalize_sampled_view_options(args.sample_step, args.sample_lines, args.max_chars)
-                .map_err(ServiceError::invalid_argument)?;
+        let sampled_view = normalize_sampled_view_options(args.sample_step, args.sample_lines)
+            .map_err(ServiceError::invalid_argument)?;
         let result = read_file_with_sampled_view(
             &file_path,
             ReadFileOptions {
                 line_range,
                 show_line_numbers: args.show_line_numbers,
+                max_chars: args.max_chars,
             },
             sampled_view,
         )

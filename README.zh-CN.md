@@ -207,8 +207,11 @@ cargo run -p docutouch-server -- serve
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
+cargo run -p docutouch-server -- read build.log --line-range -50:
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 ```
+
+`read --line-range` 推荐使用 `start:stop` 形式。它支持省略端点，也支持从文件尾部相对定位的负索引，例如 `:50`、`50:`、`-50:`、`:-1`。`step` 故意不纳入这条语法；稀疏 inspection 仍然属于 `sample_step` / `sample_lines`。
 
 ## MCP 配置示例
 

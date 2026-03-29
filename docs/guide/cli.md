@@ -23,8 +23,18 @@ npx docutouch list docutouch-server/src
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
+cargo run -p docutouch-server -- read build.log --line-range -50:
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 ```
+
+`read --line-range` 推荐使用 `start:stop`：
+
+- `:50` 读取开头 50 行
+- `50:` 从第 50 行读到结尾
+- `-50:` 直接读取最后 50 行
+- `:-1` 读取除最后一行之外的全部
+
+这一路径不支持 `step`；稀疏 inspection 继续使用 `--sample-step` / `--sample-lines`。
 
 `patch` 与 `splice` 都支持两种进入方式：
 

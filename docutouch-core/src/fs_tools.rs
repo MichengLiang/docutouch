@@ -72,9 +72,27 @@ pub struct ReadFileResult {
     pub line_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReadFileLineRange {
+    Closed {
+        start: usize,
+        end: usize,
+    },
+    SliceLike {
+        start: Option<i64>,
+        stop: Option<i64>,
+    },
+}
+
+impl From<(usize, usize)> for ReadFileLineRange {
+    fn from((start, end): (usize, usize)) -> Self {
+        Self::Closed { start, end }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct ReadFileOptions {
-    pub line_range: Option<(usize, usize)>,
+    pub line_range: Option<ReadFileLineRange>,
     pub show_line_numbers: bool,
     pub max_chars: Option<usize>,
 }
@@ -110,6 +128,26 @@ pub fn normalize_sampled_view_options(
         sample_step,
         sample_lines,
     }))
+}
+
+pub fn parse_read_file_line_range_text(text: &str) -> Result<ReadFileLineRange, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("line_range cannot be empty".to_string());
+    }
+    let normalized = trimmed.trim_matches(&['[', ']'][..]).trim();
+
+    if normalized.contains(':') {
+        return parse_slice_like_line_range_text(normalized);
+    }
+    if normalized.contains(',') {
+        return parse_closed_line_range_text(normalized, ',');
+    }
+    if is_legacy_hyphen_closed_range(normalized) {
+        return parse_closed_line_range_text(normalized, '-');
+    }
+
+    Err("line_range must use `start:stop`; this slice-like form supports omitted bounds and negative tail offsets such as `:50`, `50:`, `-50:`, or `:-1`".to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -190,11 +228,10 @@ pub fn read_file_with_sampled_view(
     }
 
     let content = fs::read_to_string(file_path)?;
-    let sliced = match options.line_range {
-        Some((start, end)) => slice_content_by_line_range(
+    let sliced = match options.line_range.as_ref() {
+        Some(line_range) => slice_content_by_line_range(
             &content,
-            start,
-            end,
+            line_range,
             file_path
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -439,6 +476,21 @@ struct SlicedContent {
 
 fn slice_content_by_line_range(
     content: &str,
+    line_range: &ReadFileLineRange,
+    display_path: &str,
+) -> Result<SlicedContent, String> {
+    match line_range {
+        ReadFileLineRange::Closed { start, end } => {
+            slice_content_by_closed_line_range(content, *start, *end, display_path)
+        }
+        ReadFileLineRange::SliceLike { start, stop } => {
+            slice_content_by_slice_like_range(content, *start, *stop)
+        }
+    }
+}
+
+fn slice_content_by_closed_line_range(
+    content: &str,
     start: usize,
     end: usize,
     display_path: &str,
@@ -472,6 +524,115 @@ fn slice_content_by_line_range(
         start_line: start,
         line_count: effective_end - start + 1,
     })
+}
+
+fn slice_content_by_slice_like_range(
+    content: &str,
+    start: Option<i64>,
+    stop: Option<i64>,
+) -> Result<SlicedContent, String> {
+    let lines = content.split_inclusive('\n').collect::<Vec<_>>();
+    let total_lines = lines.len() as i64;
+    if total_lines == 0 {
+        return Ok(SlicedContent {
+            content: String::new(),
+            start_line: 0,
+            line_count: 0,
+        });
+    }
+
+    let resolved_start = resolve_slice_like_start(start, total_lines).max(1);
+    let resolved_stop = resolve_slice_like_stop(stop, total_lines).min(total_lines);
+    if resolved_start > resolved_stop || resolved_start > total_lines || resolved_stop < 1 {
+        return Ok(SlicedContent {
+            content: String::new(),
+            start_line: 0,
+            line_count: 0,
+        });
+    }
+
+    let start_index = (resolved_start - 1) as usize;
+    let end_index = resolved_stop as usize;
+    Ok(SlicedContent {
+        content: lines[start_index..end_index].concat(),
+        start_line: resolved_start as usize,
+        line_count: (resolved_stop - resolved_start + 1) as usize,
+    })
+}
+
+fn resolve_slice_like_start(start: Option<i64>, total_lines: i64) -> i64 {
+    match start {
+        None => 1,
+        Some(value) if value > 0 => value,
+        Some(value) => total_lines + value + 1,
+    }
+}
+
+fn resolve_slice_like_stop(stop: Option<i64>, total_lines: i64) -> i64 {
+    match stop {
+        None => total_lines,
+        Some(value) if value > 0 => value,
+        Some(value) => total_lines + value,
+    }
+}
+
+fn parse_slice_like_line_range_text(text: &str) -> Result<ReadFileLineRange, String> {
+    if text.matches(':').count() != 1 {
+        return Err("line_range slice form supports exactly one `:` and does not support step; use sample_step/sample_lines for sampled inspection".to_string());
+    }
+    let (start_text, stop_text) = text
+        .split_once(':')
+        .expect("validated single-colon slice form");
+    let start = parse_slice_like_endpoint(start_text)?;
+    let stop = parse_slice_like_endpoint(stop_text)?;
+    Ok(ReadFileLineRange::SliceLike { start, stop })
+}
+
+fn parse_slice_like_endpoint(text: &str) -> Result<Option<i64>, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let value = trimmed.parse::<i64>().map_err(|_| {
+        "line_range must use `start:stop`; this slice-like form supports omitted bounds and negative tail offsets such as `:50`, `50:`, `-50:`, or `:-1`".to_string()
+    })?;
+    if value == 0 {
+        return Err("line_range slice endpoints must not be 0; use positive 1-indexed lines or negative tail offsets".to_string());
+    }
+    Ok(Some(value))
+}
+
+fn parse_closed_line_range_text(text: &str, delimiter: char) -> Result<ReadFileLineRange, String> {
+    let parts = text
+        .split(delimiter)
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err("line_range must use `start:stop`; this slice-like form supports omitted bounds and negative tail offsets such as `:50`, `50:`, `-50:`, or `:-1`".to_string());
+    }
+    let start = parts[0]
+        .parse::<usize>()
+        .map_err(|_| "line_range closed ranges must use positive integers".to_string())?;
+    let end = parts[1]
+        .parse::<usize>()
+        .map_err(|_| "line_range closed ranges must use positive integers".to_string())?;
+    Ok(ReadFileLineRange::Closed { start, end })
+}
+
+fn is_legacy_hyphen_closed_range(text: &str) -> bool {
+    let mut parts = text.split('-').map(str::trim);
+    let Some(start) = parts.next() else {
+        return false;
+    };
+    let Some(end) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && !start.is_empty()
+        && !end.is_empty()
+        && start.chars().all(|ch| ch.is_ascii_digit())
+        && end.chars().all(|ch| ch.is_ascii_digit())
 }
 
 fn count_content_lines(content: &str) -> usize {

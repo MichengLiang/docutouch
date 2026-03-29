@@ -1,6 +1,7 @@
 use docutouch_core::fs_tools::{
-    DirectoryListOptions, ReadFileOptions, ReadFileSampledViewOptions, TimestampField,
-    list_directory, normalize_sampled_view_options, read_file, read_file_with_sampled_view,
+    DirectoryListOptions, ReadFileLineRange, ReadFileOptions, ReadFileSampledViewOptions,
+    TimestampField, list_directory, normalize_sampled_view_options,
+    parse_read_file_line_range_text, read_file, read_file_with_sampled_view,
 };
 
 #[test]
@@ -41,7 +42,7 @@ fn read_file_clips_end_of_range_to_eof() {
     let result = read_file(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 5)),
+            line_range: Some((1, 5).into()),
             show_line_numbers: false,
             max_chars: None,
         },
@@ -60,7 +61,7 @@ fn read_file_can_render_one_indexed_line_numbers() {
     let result = read_file(
         &file_path,
         ReadFileOptions {
-            line_range: Some((2, 2)),
+            line_range: Some((2, 2).into()),
             show_line_numbers: true,
             max_chars: None,
         },
@@ -84,7 +85,7 @@ fn read_file_aligns_line_numbers_to_widest_visible_line() {
     let result = read_file(
         &file_path,
         ReadFileOptions {
-            line_range: Some((9, 12)),
+            line_range: Some((9, 12).into()),
             show_line_numbers: true,
             max_chars: None,
         },
@@ -109,7 +110,7 @@ fn read_file_sampled_view_renders_vertical_omission_markers() {
     let result = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 8)),
+            line_range: Some((1, 8).into()),
             show_line_numbers: false,
             max_chars: Some(80),
         },
@@ -134,7 +135,7 @@ fn read_file_sampled_view_preserves_line_number_intent() {
     let result = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 3)),
+            line_range: Some((1, 3).into()),
             show_line_numbers: false,
             max_chars: Some(5),
         },
@@ -163,7 +164,7 @@ fn read_file_sampled_view_can_render_line_numbers_when_requested() {
     let result = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((9, 12)),
+            line_range: Some((9, 12).into()),
             show_line_numbers: true,
             max_chars: Some(80),
         },
@@ -189,7 +190,7 @@ fn read_file_sampled_view_rejects_non_sampled_shapes() {
     let err = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 2)),
+            line_range: Some((1, 2).into()),
             show_line_numbers: false,
             max_chars: Some(80),
         },
@@ -215,7 +216,7 @@ fn read_file_sampled_view_rejects_zero_max_chars() {
     let err = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 2)),
+            line_range: Some((1, 2).into()),
             show_line_numbers: false,
             max_chars: Some(0),
         },
@@ -238,7 +239,7 @@ fn read_file_sampled_view_does_not_truncate_when_max_chars_is_omitted() {
     let result = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
-            line_range: Some((1, 3)),
+            line_range: Some((1, 3).into()),
             show_line_numbers: false,
             max_chars: None,
         },
@@ -291,7 +292,7 @@ fn read_file_max_chars_without_sampling_preserves_exact_line_range() {
     let result = read_file(
         &file_path,
         ReadFileOptions {
-            line_range: Some((2, 4)),
+            line_range: Some((2, 4).into()),
             show_line_numbers: true,
             max_chars: Some(12),
         },
@@ -302,6 +303,111 @@ fn read_file_max_chars_without_sampling_preserves_exact_line_range() {
         result.content,
         "2 | line 2 has m...[13 chars omitted]\n3 | line 3 has m...[13 chars omitted]\n4 | line 4 has m...[13 chars omitted]\n"
     );
+}
+
+#[test]
+fn parse_read_file_line_range_text_supports_slice_like_tail_forms() {
+    assert_eq!(
+        parse_read_file_line_range_text(":50").expect("parse range"),
+        ReadFileLineRange::SliceLike {
+            start: None,
+            stop: Some(50),
+        }
+    );
+    assert_eq!(
+        parse_read_file_line_range_text("-50:-1").expect("parse range"),
+        ReadFileLineRange::SliceLike {
+            start: Some(-50),
+            stop: Some(-1),
+        }
+    );
+}
+
+#[test]
+fn parse_read_file_line_range_text_rejects_step_and_zero_endpoints() {
+    let step_err = parse_read_file_line_range_text("1:10:2").expect_err("step should fail");
+    assert!(step_err.contains("does not support step"));
+
+    let zero_err = parse_read_file_line_range_text(":0").expect_err("zero endpoint should fail");
+    assert!(zero_err.contains("must not be 0"));
+}
+
+#[test]
+fn read_file_slice_like_range_can_read_from_tail_without_total_line_probe() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("notes.md");
+    let content = (1..=8)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    std::fs::write(&file_path, content).expect("write file");
+
+    let result = read_file(
+        &file_path,
+        ReadFileOptions {
+            line_range: Some(ReadFileLineRange::SliceLike {
+                start: Some(-3),
+                stop: None,
+            }),
+            show_line_numbers: true,
+            max_chars: None,
+        },
+    )
+    .expect("read file");
+
+    assert_eq!(result.content, "6 | line 6\n7 | line 7\n8 | line 8\n");
+    assert_eq!(result.start_line, 6);
+    assert_eq!(result.line_count, 3);
+}
+
+#[test]
+fn read_file_slice_like_range_can_exclude_the_last_line() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("notes.md");
+    let content = (1..=4)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    std::fs::write(&file_path, content).expect("write file");
+
+    let result = read_file(
+        &file_path,
+        ReadFileOptions {
+            line_range: Some(ReadFileLineRange::SliceLike {
+                start: None,
+                stop: Some(-1),
+            }),
+            show_line_numbers: false,
+            max_chars: None,
+        },
+    )
+    .expect("read file");
+
+    assert_eq!(result.content, "line 1\nline 2\nline 3\n");
+    assert_eq!(result.start_line, 1);
+    assert_eq!(result.line_count, 3);
+}
+
+#[test]
+fn read_file_slice_like_range_clamps_tail_overshoot_to_file_bounds() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("notes.md");
+    std::fs::write(&file_path, "line 1\nline 2\n").expect("write file");
+
+    let result = read_file(
+        &file_path,
+        ReadFileOptions {
+            line_range: Some(ReadFileLineRange::SliceLike {
+                start: Some(-50),
+                stop: None,
+            }),
+            show_line_numbers: false,
+            max_chars: None,
+        },
+    )
+    .expect("read file");
+
+    assert_eq!(result.content, "line 1\nline 2\n");
+    assert_eq!(result.start_line, 1);
+    assert_eq!(result.line_count, 2);
 }
 
 #[test]

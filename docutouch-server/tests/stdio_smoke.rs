@@ -362,6 +362,12 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
             input_schema_property_description(read_file, "relative_path")
                 .contains("pueue-log:<id>")
         );
+        let read_line_range_description =
+            input_schema_property_description(read_file, "line_range");
+        assert!(read_line_range_description.contains("start:stop"));
+        assert!(read_line_range_description.contains("1-indexed"));
+        assert!(!read_line_range_description.contains("start,end"));
+        assert!(!read_line_range_description.contains("step"));
         assert!(input_schema_property_description(search_text, "path").contains("pueue-log:<id>"));
 
         Ok(())
@@ -1335,6 +1341,60 @@ async fn server_read_file_supports_sampled_view() -> anyhow::Result<()> {
             .await?;
         let text = &result.content[0].as_text().unwrap().text;
         assert_eq!(text, "line 1\nline 2\n...\nline 6\nline 7\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_supports_slice_like_tail_ranges() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("notes.txt"),
+        "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let tail_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.txt",
+                    "line_range": "-3:",
+                    "show_line_numbers": true
+                }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(
+            tail_result.content[0].as_text().unwrap().text,
+            "5 | line 5\n6 | line 6\n7 | line 7\n"
+        );
+
+        let head_without_last = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": "notes.txt",
+                    "line_range": ":-1"
+                }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(
+            head_without_last.content[0].as_text().unwrap().text,
+            "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\n"
+        );
 
         Ok(())
     })

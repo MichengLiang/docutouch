@@ -11,9 +11,9 @@ pub mod splice_selection;
 
 pub use codex_apply_patch::AffectedPaths;
 pub use fs_tools::{
-    DirectoryListOptions, DirectoryListResult, ReadFileOptions, ReadFileResult,
+    DirectoryListOptions, DirectoryListResult, ReadFileLineRange, ReadFileOptions, ReadFileResult,
     ReadFileSampledViewOptions, TimestampField, list_directory, normalize_sampled_view_options,
-    read_file, read_file_with_sampled_view,
+    parse_read_file_line_range_text, read_file, read_file_with_sampled_view,
 };
 pub use patch_presentation::{PatchPresentationContext, format_patch_outcome};
 pub use patch_runtime::{

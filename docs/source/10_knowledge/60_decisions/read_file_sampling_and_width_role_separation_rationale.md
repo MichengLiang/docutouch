@@ -18,13 +18,14 @@
 
 - `sample_step` 与 `sample_lines` 共同定义 `read_file` 的 sampled inspection cadence；
 - `max_chars` 定义当前读取结果中每一条可见行的宽度约束；
-- `line_range` 继续作为 bounded exact contiguous selector，而不是 sampled-mode hint；
+- `line_range` 继续作为 bounded exact contiguous selector，而不是 sampled-mode hint；其主 public form 可采用不含 `step` 的 `start:stop` slice-like 写法；
 - exact contiguous read 与 sampled inspection 是两种不同的读取 surface，不通过 display-width 参数相互折叠；
 - prompt-facing tool description 与 parameter schema 应正向描述各参数职责，而不是通过历史问题或防御性反面提示来教学。
 
 ## Authority Basis
 
 - `line_range` 的 contract 本体是“选中哪一段连续内容”，而不是“给渲染器一个大概意图”；
+- `start:stop` 中的省略端点与负索引只改变区间锚定方式，不改变“连续内容选择器”这一 contract 本体；
 - `sample_step` / `sample_lines` 描述的是纵向观察 cadence，`max_chars` 描述的是横向显示宽度，它们属于两个不同的控制维度；
 - 若把宽度参数并入 sampled activation，调用者会在 exact read 表面上得到 sampled surface，破坏最小惊讶原则；
 - `read_file` 的 public surface 会直接暴露给模型，prompt-facing 文案若混入修复痕迹、反面警告或历史时间感，会污染模型对当前 contract 的学习；
@@ -65,6 +66,7 @@
 ## Accepted Consequences
 
 - `read_file` interface spec 应把 sampled cadence 与 width control 分别定义；
+- `read_file` 的 prompt-facing parameter teaching 应优先收敛到 `start:stop` 这一主 syntax，而不是把多种等价旧写法并列暴露给模型；
 - implementation 应让 exact contiguous read 与 sampled view 走各自清晰的渲染路径；
 - regression test 必须覆盖“仅提供 `max_chars` 时仍保持 exact contiguous read”这条边界；
 - prompt-facing tool docs、schema description 与 canonical interface page 应保持同一套正向职责语言；

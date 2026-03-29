@@ -109,6 +109,7 @@ repo 里可以同时准备 npm trusted-publishing workflow，但 npm package set
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
+cargo run -p docutouch-server -- read build.log --line-range -50:
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 cargo run -p docutouch-server -- wait-pueue 42 --mode any
 cargo run -p docutouch-server -- read pueue-log:42
@@ -122,6 +123,8 @@ npx docutouch list docutouch-server/src
 ```
 
 如果启用了 Pueue integration，`wait-pueue` 返回的 `pueue-log:<id>` handle 可继续交给 `read` 或 `search`。
+
+当你不知道日志总行数、但要先看尾部时，推荐直接写 `--line-range -50:`。
 
 ## 一个最短的 patch 调用
 

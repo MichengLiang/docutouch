@@ -207,8 +207,11 @@ Call the CLI directly:
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
+cargo run -p docutouch-server -- read build.log --line-range -50:
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 ```
+
+For `read --line-range`, prefer the `start:stop` form. It supports omitted bounds and negative tail-relative offsets such as `:50`, `50:`, `-50:`, and `:-1`. Step is intentionally excluded; sampled inspection still belongs to `sample_step` / `sample_lines`.
 
 ## MCP Config Example
 

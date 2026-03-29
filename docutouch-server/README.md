@@ -41,10 +41,13 @@ cargo run -p docutouch-server -- serve
 ```bash
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
+cargo run -p docutouch-server -- read build.log --line-range -50:
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
 cargo run -p docutouch-server -- wait-pueue 42 --mode any
 cargo run -p docutouch-server -- read pueue-log:42
 ```
+
+`read --line-range` 的主 public form 现在是 `start:stop`。它支持省略端点，也支持 `-50:`、`:-1` 这类 tail-relative 读法；`step` 不在这条语法里，稀疏 inspection 继续走 sampled view。
 
 如果接入了 Pueue integration，`wait-pueue` 会返回 `pueue-log:<id>` handle；同一个 handle 也可继续交给 `search` 子命令。
 

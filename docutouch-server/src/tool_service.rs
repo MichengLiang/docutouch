@@ -6,10 +6,11 @@ use crate::pueue::{
 use crate::splice_adapter::SpliceInvocationAdapter;
 use anyhow::Result;
 use docutouch_core::{
-    DirectoryListOptions, PatchWorkspaceRequirement, ReadFileOptions, ReadFileSampledViewOptions,
-    SearchTextView, SpliceWorkspaceRequirement, TimestampField, list_directory,
-    normalize_sampled_view_options, patch_workspace_requirement, read_file_with_sampled_view,
-    search_text, splice_workspace_requirement,
+    DirectoryListOptions, PatchWorkspaceRequirement, ReadFileLineRange, ReadFileOptions,
+    ReadFileSampledViewOptions, SearchTextView, SpliceWorkspaceRequirement, TimestampField,
+    list_directory, normalize_sampled_view_options, parse_read_file_line_range_text,
+    patch_workspace_requirement, read_file_with_sampled_view, search_text,
+    splice_workspace_requirement,
 };
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
@@ -26,7 +27,7 @@ use tokio::sync::RwLock;
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
-const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取局部片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
+const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
 const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "基于 ripgrep 的文本搜索包装。保留原始终端 `rg` 作为无限制逃生口；当前工具服务于常见的 LLM 搜索路径，按文件分组返回结果，并区分 `preview` 概览视图与 `full` 全量分组视图。`path` / `path[]` 除了文件或目录 path 外，也接受形如 `pueue-log:<id>` 的 task-log handle，可直接搜索 `wait_pueue` 返回的日志句柄。`rg_args` 仅用于 search-behavior flags，如 `-F`、`-i`、`-g`、`-P`；render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。";
 const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
@@ -71,7 +72,8 @@ pub struct ReadFileArgs {
     )]
     pub relative_path: String,
     #[schemars(
-        description = "可选的 1-indexed 闭区间行范围。支持 [start, end] 或字符串形式 start,end / start-end / start:end。"
+        with = "Option<String>",
+        description = "连续行范围。使用 `start:stop`；正数端点按 1-indexed line number 解释；端点可省略；负索引按从文件尾部相对定位解释。"
     )]
     #[serde(default)]
     pub line_range: Option<LineRangeInput>,
@@ -98,7 +100,7 @@ pub struct ReadFileArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum LineRangeInput {
-    Pair(Vec<usize>),
+    Pair(Vec<i64>),
     Text(String),
 }
 
@@ -599,37 +601,25 @@ fn default_max_depth() -> usize {
 
 fn normalize_line_range(
     line_range: Option<LineRangeInput>,
-) -> Result<Option<(usize, usize)>, String> {
+) -> Result<Option<ReadFileLineRange>, String> {
     match line_range {
         None => Ok(None),
         Some(LineRangeInput::Pair(values)) => {
             if values.len() != 2 {
                 return Err("line_range must contain exactly two integers".to_string());
             }
-            Ok(Some((values[0], values[1])))
-        }
-        Some(LineRangeInput::Text(text)) => {
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return Err("line_range cannot be empty".to_string());
+            if values[0] <= 0 || values[1] <= 0 {
+                return Err(
+                    "line_range array form is compatibility-only and requires positive 1-indexed integers; prefer the `start:stop` string form for tail-relative reads"
+                        .to_string(),
+                );
             }
-            let normalized = trimmed.trim_matches(&['[', ']'][..]);
-            let parts = normalized
-                .split(|ch| [',', '-', ':'].contains(&ch))
-                .map(str::trim)
-                .filter(|part| !part.is_empty())
-                .collect::<Vec<_>>();
-            if parts.len() != 2 {
-                return Err("line_range must be [start, end] or a string like 'start,end', 'start-end', or 'start:end'".to_string());
-            }
-            let start = parts[0].parse::<usize>().map_err(|_| {
-                "line_range must be [start, end] or a string like 'start,end', 'start-end', or 'start:end'".to_string()
-            })?;
-            let end = parts[1].parse::<usize>().map_err(|_| {
-                "line_range must be [start, end] or a string like 'start,end', 'start-end', or 'start:end'".to_string()
-            })?;
-            Ok(Some((start, end)))
+            Ok(Some(ReadFileLineRange::Closed {
+                start: values[0] as usize,
+                end: values[1] as usize,
+            }))
         }
+        Some(LineRangeInput::Text(text)) => parse_read_file_line_range_text(&text).map(Some),
     }
 }
 

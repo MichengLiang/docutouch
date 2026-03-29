@@ -4,8 +4,8 @@ use crate::tool_service::{ToolService, render_read_surface_content, render_searc
 use crate::transport_shell::TransportSourceProvenance;
 use anyhow::Result;
 use docutouch_core::{
-    DirectoryListOptions, ReadFileOptions, SearchTextView, TimestampField, list_directory,
-    normalize_sampled_view_options,
+    DirectoryListOptions, ReadFileLineRange, ReadFileOptions, SearchTextView, TimestampField,
+    list_directory, normalize_sampled_view_options, parse_read_file_line_range_text,
 };
 use serde_json::json;
 use std::ffi::OsString;
@@ -36,7 +36,7 @@ struct ListCommand {
 
 struct ReadCommand {
     path: String,
-    line_range: Option<(usize, usize)>,
+    line_range: Option<ReadFileLineRange>,
     show_line_numbers: bool,
     sample_step: Option<usize>,
     sample_lines: Option<usize>,
@@ -662,27 +662,11 @@ fn parse_task_id(value: &str) -> Result<u64, String> {
         .map_err(|_| format!("wait-pueue task IDs must be non-negative integers, got `{value}`"))
 }
 
-fn parse_line_range_text(text: &str) -> Result<(usize, usize), String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return Err("--line-range cannot be empty".to_string());
-    }
-    let normalized = trimmed.trim_matches(&['[', ']'][..]);
-    let parts = normalized
-        .split(|ch| [',', '-', ':'].contains(&ch))
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return Err("--line-range must be `start,end`, `start-end`, or `start:end`".to_string());
-    }
-    let start = parts[0]
-        .parse::<usize>()
-        .map_err(|_| "--line-range must contain integers".to_string())?;
-    let end = parts[1]
-        .parse::<usize>()
-        .map_err(|_| "--line-range must contain integers".to_string())?;
-    Ok((start, end))
+fn parse_line_range_text(text: &str) -> Result<ReadFileLineRange, String> {
+    parse_read_file_line_range_text(text).map_err(|message| match message.as_str() {
+        "line_range cannot be empty" => "--line-range cannot be empty".to_string(),
+        _ => format!("--line-range {message}"),
+    })
 }
 
 fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {

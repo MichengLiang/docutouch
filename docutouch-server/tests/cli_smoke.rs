@@ -1728,3 +1728,38 @@ async fn cli_read_partial_sampled_flags_match_mcp_defaults() -> anyhow::Result<(
     assert!(utf8(&cli_output.stderr).is_empty());
     Ok(())
 }
+
+#[tokio::test]
+async fn cli_read_supports_slice_like_tail_ranges() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    make_read_fixture(&server_temp)?;
+    make_read_fixture(&cli_temp)?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "read_file",
+        json!({
+            "relative_path": "notes.txt",
+            "line_range": "-3:",
+            "show_line_numbers": true
+        }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &[
+            "read",
+            "notes.txt",
+            "--line-range",
+            "-3:",
+            "--show-line-numbers",
+        ],
+        None,
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}

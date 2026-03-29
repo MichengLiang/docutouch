@@ -26,7 +26,9 @@ use tokio::sync::RwLock;
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
-const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "基于 ripgrep 的文本搜索包装。保留原始终端 `rg` 作为无限制逃生口；当前工具服务于常见的 LLM 搜索路径，按文件分组返回结果，并区分 `preview` 概览视图与 `full` 全量分组视图。`rg_args` 仅用于 search-behavior flags，如 `-F`、`-i`、`-g`、`-P`；render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。";
+const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取局部片段。也可结合 `sample_step`、`sample_lines`、`max_chars` 请求一个低成本局部检查视图。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
+const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "基于 ripgrep 的文本搜索包装。保留原始终端 `rg` 作为无限制逃生口；当前工具服务于常见的 LLM 搜索路径，按文件分组返回结果，并区分 `preview` 概览视图与 `full` 全量分组视图。`path` / `path[]` 除了文件或目录 path 外，也接受形如 `pueue-log:<id>` 的 task-log handle，可直接搜索 `wait_pueue` 返回的日志句柄。`rg_args` 仅用于 search-behavior flags，如 `-F`、`-i`、`-g`、`-P`；render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。";
+const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
 #[derive(Clone)]
 pub struct ToolService {
@@ -65,7 +67,7 @@ pub struct ListDirectoryArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReadFileArgs {
     #[schemars(
-        description = "相对于 workspace 的文件路径；未设置 workspace 时也可直接传 absolute path。"
+        description = "相对于 workspace 的文件路径；未设置 workspace 时也可直接传 absolute path；也可传形如 `pueue-log:<id>` 的 task-log handle literal。"
     )]
     pub relative_path: String,
     #[schemars(
@@ -121,7 +123,7 @@ pub struct SearchTextArgs {
     #[schemars(description = "要搜索的文本或 ripgrep 模式。")]
     pub query: String,
     #[schemars(
-        description = "必填搜索范围。可传单个 relative/absolute path，或传由文件/目录组成的 path 数组；数组中的范围会合并为同一次搜索。"
+        description = "必填搜索范围。可传单个 relative/absolute path，也可传形如 `pueue-log:<id>` 的 task-log handle；还可传由文件、目录或 `pueue-log:<id>` 组成的 path 数组，数组中的范围会合并为同一次搜索。"
     )]
     pub path: SearchTextPathInput,
     #[schemars(
@@ -545,7 +547,7 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     )?);
     tools.push(build_mcp_tool::<ReadFileArgs>(
         "read_file",
-        "默认返回全文；可选用 line_range 读取局部片段。也可结合 `sample_step`、`sample_lines`、`max_chars` 请求一个低成本局部检查视图。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。",
+        READ_FILE_TOOL_DESCRIPTION,
     )?);
     tools.push(build_mcp_tool::<SearchTextArgs>(
         "search_text",
@@ -553,7 +555,7 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     )?);
     tools.push(build_mcp_tool::<WaitPueueArgs>(
         "wait_pueue",
-        "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。缺省时对调用开始瞬间的未完成 task 快照进行等待；完成后返回可继续交给 `read_file` / `search_text` 的 `log_handle`。",
+        WAIT_PUEUE_TOOL_DESCRIPTION,
     )?);
     tools.push(build_mcp_tool::<ApplyPatchArgs>(
         "apply_patch",

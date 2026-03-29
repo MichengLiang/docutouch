@@ -273,6 +273,24 @@ fn assert_current_time_surface(output: &str) {
     assert_eq!(bytes[16], b':');
 }
 
+fn input_schema_property_description(tool: &rmcp::model::Tool, property: &str) -> String {
+    serde_json::to_value(tool.input_schema.as_ref())
+        .expect("input schema json")
+        .get("properties")
+        .and_then(|properties| properties.get(property))
+        .and_then(|schema| schema.get("description"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn tool_description(tool: &rmcp::model::Tool) -> String {
+    tool.description
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn server_lists_expected_tools() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
@@ -300,6 +318,47 @@ async fn server_lists_expected_tools() -> anyhow::Result<()> {
         assert!(!tool_names.contains(&"read_files".to_string()));
         assert!(tool_names.contains(&"apply_patch".to_string()));
         assert!(tool_names.contains(&"apply_splice".to_string()));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let tools = client.list_all_tools().await?;
+        let read_file = tools
+            .iter()
+            .find(|tool| tool.name.to_string() == "read_file")
+            .expect("read_file tool");
+        let search_text = tools
+            .iter()
+            .find(|tool| tool.name.to_string() == "search_text")
+            .expect("search_text tool");
+        let wait_pueue = tools
+            .iter()
+            .find(|tool| tool.name.to_string() == "wait_pueue")
+            .expect("wait_pueue tool");
+
+        assert!(tool_description(read_file).contains("pueue-log:<id>"));
+        assert!(tool_description(search_text).contains("pueue-log:<id>"));
+        assert!(tool_description(wait_pueue).contains("pueue-log:<id>"));
+
+        assert!(
+            input_schema_property_description(read_file, "relative_path")
+                .contains("pueue-log:<id>")
+        );
+        assert!(input_schema_property_description(search_text, "path").contains("pueue-log:<id>"));
 
         Ok(())
     })

@@ -110,6 +110,9 @@ repo 里可以同时准备 npm trusted-publishing workflow，但 npm package set
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
+cargo run -p docutouch-server -- wait-pueue 42 --mode any
+cargo run -p docutouch-server -- read pueue-log:42
+cargo run -p docutouch-server -- search ERROR pueue-log:42 --view preview
 ```
 
 当 npm wrapper `docutouch` 首次发布后，也可以用：
@@ -117,6 +120,8 @@ cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view 
 ```bash
 npx docutouch list docutouch-server/src
 ```
+
+如果启用了 Pueue integration，`wait-pueue` 返回的 `pueue-log:<id>` handle 可继续交给 `read` 或 `search`。
 
 ## 一个最短的 patch 调用
 

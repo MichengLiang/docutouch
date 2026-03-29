@@ -107,7 +107,10 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 - `list_directory`
 - `read_file`
 - `search_text`
+- `wait_pueue`
 - `apply_patch`
 - `apply_splice`
+
+其中 `wait_pueue` 返回的 `log_handle` 采用 `pueue-log:<id>` literal，可直接作为 `read_file.relative_path` 或 `search_text.path` / `path[]` 继续使用。
 
 模块级说明见 [../../docutouch-server/README.md](../../docutouch-server/README.md)。

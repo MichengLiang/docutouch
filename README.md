@@ -19,6 +19,7 @@ Support tools remain available around that workflow:
 - `list_directory`
 - `read_file`
 - `search_text`
+- `wait_pueue`
 
 ## When To Reach For DocuTouch
 
@@ -285,10 +286,13 @@ For `.docutouch/failed-patches/*.patch` repair artifacts, the CLI restores the o
   Builds an ASCII tree view of the workspace.
 
 - `read_file`
-  Reads one file at a time, with line ranges, line numbers, and sampled inspection.
+  Reads one file at a time, with line ranges, line numbers, and sampled inspection. `read_file` also accepts `pueue-log:<id>` handles returned by `wait_pueue`.
 
 - `search_text`
-  Wraps ripgrep and returns grouped file-oriented search results.
+  Wraps ripgrep and returns grouped file-oriented search results. `search_text` also accepts `pueue-log:<id>` handles returned by `wait_pueue`.
+
+- `wait_pueue`
+  Waits for background Pueue tasks and returns `pueue-log:<id>` handles that can be passed back into `read_file` or `search_text`.
 
 ## Documentation
 

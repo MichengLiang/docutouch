@@ -19,6 +19,7 @@ DocuTouch 是一组面向 LLM coding agents 的结构化文件工具。
 - `list_directory`
 - `read_file`
 - `search_text`
+- `wait_pueue`
 
 ## 什么时候会用到它
 
@@ -285,10 +286,13 @@ npm install -g docutouch
   以 ASCII 树建立文件清单。
 
 - `read_file`
-  以单文件为主路径读取上下文，支持行号、分段和 sampled inspection。
+  以单文件为主路径读取上下文，支持行号、分段和 sampled inspection；也接受 `wait_pueue` 返回的 `pueue-log:<id>` 句柄。
 
 - `search_text`
-  用 ripgrep 做底层搜索，并把结果按文件分组返回。
+  用 ripgrep 做底层搜索，并把结果按文件分组返回；也接受 `wait_pueue` 返回的 `pueue-log:<id>` 句柄。
+
+- `wait_pueue`
+  等待后台 Pueue task，并返回可继续交给 `read_file` 或 `search_text` 的 `pueue-log:<id>` 日志句柄。
 
 ## 文档入口
 

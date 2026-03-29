@@ -15,6 +15,7 @@
 - `list_directory`
 - `read_file`
 - `search_text`
+- `wait_pueue`
 - `apply_patch`
 - `apply_splice`
 
@@ -41,7 +42,11 @@ cargo run -p docutouch-server -- serve
 cargo run -p docutouch-server -- list docutouch-server/src
 cargo run -p docutouch-server -- read README.md --line-range 1:40
 cargo run -p docutouch-server -- search apply_patch docutouch-server/src --view full
+cargo run -p docutouch-server -- wait-pueue 42 --mode any
+cargo run -p docutouch-server -- read pueue-log:42
 ```
+
+如果接入了 Pueue integration，`wait-pueue` 会返回 `pueue-log:<id>` handle；同一个 handle 也可继续交给 `search` 子命令。
 
 `patch` 与 `splice` 也可以从 stdin 读取输入文本。
 

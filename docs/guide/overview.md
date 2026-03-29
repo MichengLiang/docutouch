@@ -17,8 +17,11 @@ DocuTouch 是一组面向 LLM coding agents 的结构化文件工具。
 2. 列出目录
 3. 读取上下文
 4. 搜索相关文本
-5. 应用结构化修改
-6. 接收可诊断反馈
+5. 等待后台任务并继续检查日志
+6. 应用结构化修改
+7. 接收可诊断反馈
+
+其中 `wait_pueue` 返回的 `pueue-log:<id>` handle 可直接作为 `read_file.relative_path` 或 `search_text.path` / `path[]` 继续使用。
 
 DocuTouch 主要通过 MCP / injection 这类代理工具接入方式使用。裸 `docutouch` 命令直接进入 stdio MCP server；CLI 继续保留，并且通过 `docutouch patch`、`docutouch read` 这类顶层子命令为 repair loop 提供 stdin/file 两种进入方式。
 

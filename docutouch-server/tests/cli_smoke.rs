@@ -246,6 +246,10 @@ fn normalize_simple_tool_error(text: &str) -> &str {
     text.strip_prefix("Mcp error: -32602: ").unwrap_or(text)
 }
 
+fn noisy_pueue_log() -> &'static str {
+    "phase 1\rphase 2\n\u{1b}[32mDONE\u{1b}[0m\n"
+}
+
 async fn call_server_tool(
     cwd: &std::path::Path,
     name: &str,
@@ -853,6 +857,96 @@ async fn cli_search_pueue_log_handle_matches_mcp_output() -> anyhow::Result<()> 
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stdout).contains("scope: [pueue-log:802, notes.txt]"));
     assert!(utf8(&cli_output.stdout).contains("pueue-log:802 (1 line, 1 match)"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_read_pueue_log_handle_surfaces_clean_text() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    let server_fixture = PueueStubFixture::new(
+        server_temp.path(),
+        &[status_snapshot(vec![done_task(804, "Success", 0)])],
+        &[(804, noisy_pueue_log())],
+    )?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[status_snapshot(vec![done_task(804, "Success", 0)])],
+        &[(804, noisy_pueue_log())],
+    )?;
+
+    let server_output = call_server_tool_with_config(
+        server_temp.path(),
+        "read_file",
+        json!({
+            "relative_path": "pueue-log:804"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["read", "pueue-log:804"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert_eq!(utf8(&cli_output.stdout), "phase 2\nDONE\n");
+    assert!(!utf8(&cli_output.stdout).contains("phase 1"));
+    assert!(!utf8(&cli_output.stdout).contains("\u{1b}"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_search_pueue_log_handle_uses_clean_text_surface() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    let server_fixture = PueueStubFixture::new(
+        server_temp.path(),
+        &[status_snapshot(vec![done_task(805, "Success", 0)])],
+        &[(805, noisy_pueue_log())],
+    )?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[status_snapshot(vec![done_task(805, "Success", 0)])],
+        &[(805, noisy_pueue_log())],
+    )?;
+
+    let server_output = call_server_tool_with_config(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "DONE",
+            "path": "pueue-log:805",
+            "view": "full"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["search", "DONE", "pueue-log:805", "--view", "full"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stdout).contains("scope: pueue-log:805"));
+    assert!(utf8(&cli_output.stdout).contains("pueue-log:805 (1 line, 1 match)"));
+    assert!(utf8(&cli_output.stdout).contains("2 | DONE"));
+    assert!(!utf8(&cli_output.stdout).contains("phase 1"));
+    assert!(!utf8(&cli_output.stdout).contains("\u{1b}"));
     assert!(utf8(&cli_output.stderr).is_empty());
     Ok(())
 }

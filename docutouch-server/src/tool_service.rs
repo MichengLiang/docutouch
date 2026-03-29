@@ -1,15 +1,15 @@
 use crate::patch_adapter::{PatchInvocationAdapter, PatchSourceProvenance};
 use crate::pueue::{
     PueueError, PueueRuntime, PueueTaskSnapshot, PueueWaitSnapshot, WaitMode, WaitReason,
-    format_task_log_handle, parse_task_log_handle,
+    clean_task_log_surface, format_task_log_handle, parse_task_log_handle,
 };
 use crate::splice_adapter::SpliceInvocationAdapter;
 use anyhow::Result;
 use docutouch_core::{
-    DirectoryListOptions, PatchWorkspaceRequirement, ReadFileOptions, SearchTextView,
-    SpliceWorkspaceRequirement, TimestampField, list_directory, normalize_sampled_view_options,
-    patch_workspace_requirement, read_file_with_sampled_view, search_text,
-    splice_workspace_requirement,
+    DirectoryListOptions, PatchWorkspaceRequirement, ReadFileOptions, ReadFileSampledViewOptions,
+    SearchTextView, SpliceWorkspaceRequirement, TimestampField, list_directory,
+    normalize_sampled_view_options, patch_workspace_requirement, read_file_with_sampled_view,
+    search_text, splice_workspace_requirement,
 };
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
@@ -199,6 +199,24 @@ pub(crate) struct ResolvedSearchTextPaths {
     pub search_paths: Vec<PathBuf>,
     pub display_scope: String,
     pub path_overrides: Vec<(String, String)>,
+    _temp_surface_dir: Option<PueueCleanSurfaceTempDir>,
+}
+
+#[derive(Debug)]
+struct PueueCleanSurfaceTempDir {
+    path: PathBuf,
+}
+
+#[derive(Debug)]
+struct LoadedPueueCleanSurface {
+    runtime_dir: PathBuf,
+    clean: String,
+}
+
+#[derive(Debug)]
+enum ResolvedReadSurface {
+    File(PathBuf),
+    PueueLog(u64),
 }
 
 impl ToolService {
@@ -295,14 +313,13 @@ impl ToolService {
     async fn read_file_impl(&self, args: ReadFileArgs) -> Result<String, ServiceError> {
         let _guard = self.execution_lock.read().await;
         let workspace = self.workspace.read().await.clone();
-        let file_path =
-            resolve_read_surface_path(&args.relative_path, workspace.as_deref()).await?;
         let line_range =
             normalize_line_range(args.line_range).map_err(ServiceError::invalid_argument)?;
         let sampled_view = normalize_sampled_view_options(args.sample_step, args.sample_lines)
             .map_err(ServiceError::invalid_argument)?;
-        let result = read_file_with_sampled_view(
-            &file_path,
+        render_read_surface_content(
+            &args.relative_path,
+            workspace.as_deref(),
             ReadFileOptions {
                 line_range,
                 show_line_numbers: args.show_line_numbers,
@@ -310,8 +327,7 @@ impl ToolService {
             },
             sampled_view,
         )
-        .map_err(map_read_error)?;
-        Ok(result.content)
+        .await
     }
 
     async fn search_text_impl(&self, args: SearchTextArgs) -> Result<String, ServiceError> {
@@ -324,32 +340,20 @@ impl ToolService {
 
         let _guard = self.execution_lock.read().await;
         let display_base_dir = self.workspace.read().await.clone();
-        let raw_paths = args
-            .path
-            .paths()
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        let resolved = resolve_search_surface_paths(
-            &raw_paths,
-            display_base_dir.as_deref(),
-            display_base_dir.as_deref(),
-        )
-        .await?;
-        let rendered = search_text(
+        render_search_surface(
             &args.query,
-            &resolved.search_paths,
+            &args
+                .path
+                .paths()
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
             &args.rg_args,
             args.view.into(),
             display_base_dir.as_deref(),
+            display_base_dir.as_deref(),
         )
         .await
-        .map_err(ServiceError::invalid_argument)?;
-        Ok(rewrite_search_text_surface(
-            rendered,
-            &resolved.display_scope,
-            &resolved.path_overrides,
-        ))
     }
 
     async fn wait_pueue_impl(&self, args: WaitPueueArgs) -> Result<String, ServiceError> {
@@ -936,14 +940,52 @@ fn relative_path_requires_workspace_message() -> String {
     )
 }
 
-pub(crate) async fn resolve_read_surface_path(
+pub(crate) async fn render_read_surface_content(
     raw_path: &str,
     workspace: Option<&Path>,
-) -> Result<PathBuf, ServiceError> {
-    if let Some(path) = try_resolve_pueue_log_handle(raw_path).await? {
-        return Ok(path);
+    read_options: ReadFileOptions,
+    sampled_view: Option<ReadFileSampledViewOptions>,
+) -> Result<String, ServiceError> {
+    match resolve_read_surface(raw_path, workspace).await? {
+        ResolvedReadSurface::File(path) => {
+            read_file_with_sampled_view(&path, read_options, sampled_view)
+                .map(|result| result.content)
+                .map_err(map_read_error)
+        }
+        ResolvedReadSurface::PueueLog(task_id) => {
+            let surface = load_clean_pueue_log_surface(task_id).await?;
+            let temp_dir = PueueCleanSurfaceTempDir::new(&surface.runtime_dir)?;
+            let clean_path = temp_dir.write_surface(task_id, &surface.clean)?;
+            read_file_with_sampled_view(&clean_path, read_options, sampled_view)
+                .map(|result| result.content)
+                .map_err(map_read_error)
+        }
     }
-    resolve_user_path(raw_path, workspace)
+}
+
+pub(crate) async fn render_search_surface(
+    query: &str,
+    raw_paths: &[String],
+    rg_args: &str,
+    view: SearchTextView,
+    workspace: Option<&Path>,
+    display_base_dir: Option<&Path>,
+) -> Result<String, ServiceError> {
+    let resolved = resolve_search_surface_paths(raw_paths, workspace, display_base_dir).await?;
+    let rendered = search_text(
+        query,
+        &resolved.search_paths,
+        rg_args,
+        view,
+        display_base_dir,
+    )
+    .await
+    .map_err(ServiceError::invalid_argument)?;
+    Ok(rewrite_search_text_surface(
+        rendered,
+        &resolved.display_scope,
+        &resolved.path_overrides,
+    ))
 }
 
 pub(crate) async fn resolve_search_surface_paths(
@@ -955,6 +997,7 @@ pub(crate) async fn resolve_search_surface_paths(
     let mut display_labels = Vec::new();
     let mut path_overrides = Vec::new();
     let mut seen = HashSet::new();
+    let mut temp_surface_dir = None;
 
     for raw_path in raw_paths {
         if raw_path.trim().is_empty() {
@@ -965,7 +1008,14 @@ pub(crate) async fn resolve_search_surface_paths(
 
         let handle_task_id = parse_task_log_handle(raw_path).map_err(map_pueue_log_handle_error)?;
         let resolved_path = if let Some(task_id) = handle_task_id {
-            resolve_task_log_path(task_id).await?
+            let surface = load_clean_pueue_log_surface(task_id).await?;
+            let temp_dir = match temp_surface_dir.take() {
+                Some(temp_dir) => temp_dir,
+                None => PueueCleanSurfaceTempDir::new(&surface.runtime_dir)?,
+            };
+            let clean_path = temp_dir.write_surface(task_id, &surface.clean)?;
+            temp_surface_dir = Some(temp_dir);
+            clean_path
         } else {
             let path = resolve_user_path(raw_path, workspace)?;
             if !path.exists() {
@@ -994,6 +1044,7 @@ pub(crate) async fn resolve_search_surface_paths(
         search_paths,
         display_scope: format_display_scope(&display_labels),
         path_overrides,
+        _temp_surface_dir: temp_surface_dir,
     })
 }
 
@@ -1068,11 +1119,15 @@ fn resolve_user_path(raw_path: &str, workspace: Option<&Path>) -> Result<PathBuf
     Ok(workspace.join(path))
 }
 
-async fn try_resolve_pueue_log_handle(raw_path: &str) -> Result<Option<PathBuf>, ServiceError> {
+async fn resolve_read_surface(
+    raw_path: &str,
+    workspace: Option<&Path>,
+) -> Result<ResolvedReadSurface, ServiceError> {
     let Some(task_id) = parse_task_log_handle(raw_path).map_err(map_pueue_log_handle_error)? else {
-        return Ok(None);
+        return resolve_user_path(raw_path, workspace).map(ResolvedReadSurface::File);
     };
-    resolve_task_log_path(task_id).await.map(Some)
+    resolve_task_log_path(task_id).await?;
+    Ok(ResolvedReadSurface::PueueLog(task_id))
 }
 
 async fn resolve_task_log_path(task_id: u64) -> Result<PathBuf, ServiceError> {
@@ -1081,6 +1136,81 @@ async fn resolve_task_log_path(task_id: u64) -> Result<PathBuf, ServiceError> {
         .resolve_task_log_path(task_id)
         .await
         .map_err(map_pueue_log_handle_error)
+}
+
+async fn load_clean_pueue_log_surface(
+    task_id: u64,
+) -> Result<LoadedPueueCleanSurface, ServiceError> {
+    let runtime = PueueRuntime::from_env().map_err(map_pueue_runtime_error)?;
+    let log_path = runtime
+        .resolve_task_log_path(task_id)
+        .await
+        .map_err(map_pueue_log_handle_error)?;
+    let raw = std::fs::read(&log_path).map_err(|err| {
+        ServiceError::tool_failure(format!(
+            "Failed to read task log {task_id} from {}: {err}",
+            log_path.display()
+        ))
+    })?;
+    Ok(LoadedPueueCleanSurface {
+        runtime_dir: runtime.paths().runtime_dir.clone(),
+        clean: clean_task_log_surface(&String::from_utf8_lossy(&raw)),
+    })
+}
+
+impl PueueCleanSurfaceTempDir {
+    fn new(runtime_dir: &Path) -> Result<Self, ServiceError> {
+        let root = runtime_dir.join(".docutouch-clean-surfaces");
+        std::fs::create_dir_all(&root).map_err(|err| {
+            ServiceError::tool_failure(format!(
+                "Failed to create clean-surface temp root {}: {err}",
+                root.display()
+            ))
+        })?;
+
+        for attempt in 0..32u32 {
+            let candidate = root.join(format!(
+                "surface-{}-{}-{attempt}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or(Duration::ZERO)
+                    .as_nanos()
+            ));
+            match std::fs::create_dir(&candidate) {
+                Ok(()) => return Ok(Self { path: candidate }),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => {
+                    return Err(ServiceError::tool_failure(format!(
+                        "Failed to create clean-surface temp directory {}: {err}",
+                        candidate.display()
+                    )));
+                }
+            }
+        }
+
+        Err(ServiceError::tool_failure(format!(
+            "Failed to allocate clean-surface temp directory under {}",
+            root.display()
+        )))
+    }
+
+    fn write_surface(&self, task_id: u64, clean: &str) -> Result<PathBuf, ServiceError> {
+        let path = self.path.join(format!("{task_id}.log"));
+        std::fs::write(&path, clean).map_err(|err| {
+            ServiceError::tool_failure(format!(
+                "Failed to materialize clean task log surface {}: {err}",
+                path.display()
+            ))
+        })?;
+        Ok(path)
+    }
+}
+
+impl Drop for PueueCleanSurfaceTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 pub fn validate_workspace_path(path: &Path) -> Result<PathBuf, String> {

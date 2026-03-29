@@ -1,14 +1,11 @@
 use crate::patch_adapter::{PatchInvocationAdapter, PatchNumberedEvidenceMode};
 use crate::splice_adapter::SpliceInvocationAdapter;
-use crate::tool_service::{
-    ToolService, resolve_read_surface_path, resolve_search_surface_paths,
-    rewrite_search_text_surface,
-};
+use crate::tool_service::{ToolService, render_read_surface_content, render_search_surface};
 use crate::transport_shell::TransportSourceProvenance;
 use anyhow::Result;
 use docutouch_core::{
     DirectoryListOptions, ReadFileOptions, SearchTextView, TimestampField, list_directory,
-    normalize_sampled_view_options, read_file_with_sampled_view, search_text,
+    normalize_sampled_view_options,
 };
 use serde_json::json;
 use std::ffi::OsString;
@@ -431,10 +428,6 @@ async fn run_list(command: ListCommand) -> Result<i32> {
 
 async fn run_read(command: ReadCommand) -> Result<i32> {
     let cwd = std::env::current_dir()?;
-    let path = match resolve_read_surface_path(&command.path, Some(cwd.as_path())).await {
-        Ok(path) => path,
-        Err(error) => return emit_text_result(Err(error.to_string())),
-    };
     let sampled_view =
         match normalize_sampled_view_options(command.sample_step, command.sample_lines) {
             Ok(sampled_view) => sampled_view,
@@ -443,8 +436,9 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
                 return Ok(1);
             }
         };
-    let result = read_file_with_sampled_view(
-        &path,
+    let result = render_read_surface_content(
+        &command.path,
+        Some(cwd.as_path()),
         ReadFileOptions {
             line_range: command.line_range,
             show_line_numbers: command.show_line_numbers,
@@ -452,8 +446,8 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
         },
         sampled_view,
     )
-    .map(|value| value.content)
-    .map_err(|err| err.to_string());
+    .await
+    .map_err(|error| error.to_string());
     emit_text_result(result)
 }
 
@@ -462,27 +456,16 @@ async fn run_search(command: SearchCommand) -> Result<i32> {
         return emit_result(Err(std::io::Error::other("query cannot be empty")));
     }
     let cwd = std::env::current_dir()?;
-    let resolved = match resolve_search_surface_paths(
-        &command.paths,
-        Some(cwd.as_path()),
-        Some(cwd.as_path()),
-    )
-    .await
-    {
-        Ok(resolved) => resolved,
-        Err(error) => return emit_text_result(Err(error.to_string())),
-    };
-    let result = search_text(
+    let result = render_search_surface(
         &command.query,
-        &resolved.search_paths,
+        &command.paths,
         &command.rg_args,
         command.view,
         Some(cwd.as_path()),
+        Some(cwd.as_path()),
     )
     .await
-    .map(|rendered| {
-        rewrite_search_text_surface(rendered, &resolved.display_scope, &resolved.path_overrides)
-    });
+    .map_err(|error| error.to_string());
     emit_text_result(result)
 }
 

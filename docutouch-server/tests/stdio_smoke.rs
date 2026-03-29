@@ -258,6 +258,10 @@ fn status_snapshot(tasks: Vec<Value>) -> Value {
     )
 }
 
+fn noisy_pueue_log() -> &'static str {
+    "phase 1\rphase 2\n\u{1b}[32mDONE\u{1b}[0m\n"
+}
+
 fn assert_current_time_surface(output: &str) {
     let line = output
         .lines()
@@ -495,6 +499,78 @@ async fn server_search_text_accepts_pueue_log_handle_in_path_arrays() -> anyhow:
             assert!(text.contains("pueue-log:42 (1 line, 1 match)"));
             assert!(text.contains("notes.txt (1 line, 1 match)"));
             assert!(!text.contains("task_logs/42.log"));
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_read_file_cleans_pueue_log_surface() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = PueueStubFixture::new(
+        temp.path(),
+        &[status_snapshot(vec![done_task(77, "Success", 0)])],
+        &[(77, noisy_pueue_log())],
+    )?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            let result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({
+                        "relative_path": "pueue-log:77"
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(text, "phase 2\nDONE\n");
+            assert!(!text.contains("phase 1"));
+            assert!(!text.contains("\u{1b}"));
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_search_text_uses_the_same_clean_pueue_log_surface() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = PueueStubFixture::new(
+        temp.path(),
+        &[status_snapshot(vec![done_task(78, "Success", 0)])],
+        &[(78, noisy_pueue_log())],
+    )?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            let result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "search_text".into(),
+                    arguments: Some(json_object(json!({
+                        "query": "DONE",
+                        "path": "pueue-log:78",
+                        "view": "full"
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains("scope: pueue-log:78"));
+            assert!(text.contains("pueue-log:78 (1 line, 1 match)"));
+            assert!(text.contains("2 | DONE"));
+            assert!(!text.contains("phase 1"));
+            assert!(!text.contains("\u{1b}"));
             Ok(())
         }
     )

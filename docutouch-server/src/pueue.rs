@@ -6,6 +6,12 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::{Instant, sleep};
 
+#[path = "pueue_log_clean.rs"]
+pub(crate) mod pueue_log_clean;
+
+#[allow(unused_imports)]
+pub(crate) use pueue_log_clean::clean_task_log_surface;
+
 pub(crate) const DOCUTOUCH_PUEUE_BIN_ENV: &str = "DOCUTOUCH_PUEUE_BIN";
 pub(crate) const DOCUTOUCH_PUEUE_RUNTIME_DIR_ENV: &str = "DOCUTOUCH_PUEUE_RUNTIME_DIR";
 pub(crate) const DOCUTOUCH_PUEUE_TIMEOUT_SECONDS_ENV: &str = "DOCUTOUCH_PUEUE_TIMEOUT_SECONDS";

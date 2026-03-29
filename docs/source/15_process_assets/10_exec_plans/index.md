@@ -95,6 +95,9 @@
 * - `pueue_task_handle_adapter_implementation_plan.md`
   - Process asset page
   - DocuTouch 中 `wait_pueue` 与 `pueue-log:<id>` integration 的总执行计划 host
+* - `pueue_log_clean_surface_implementation_plan.md`
+  - Process asset page
+  - `pueue-log:<id>` clean surface implementation 的总执行计划 host
 ```
 
 ## 页面目录
@@ -116,4 +119,5 @@ apply_splice_implementation_schedule_plan
 apply_patch_semantics_hardening_plan
 apply_patch_line_number_assist_rollout_plan
 pueue_task_handle_adapter_implementation_plan
+pueue_log_clean_surface_implementation_plan
 ```

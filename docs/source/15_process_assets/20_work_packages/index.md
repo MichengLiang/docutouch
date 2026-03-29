@@ -82,6 +82,15 @@
 * - `pueue_validation_and_parity_work_package.md`
   - Process asset page
   - Pueue integration 的 parity / validation / kickoff 收口 work package
+* - `pueue_log_clean_parser_work_package.md`
+  - Process asset page
+  - `pueue-log:<id>` raw->clean parser kernel 的 implementation work package
+* - `pueue_log_clean_surface_integration_work_package.md`
+  - Process asset page
+  - `pueue-log:<id>` clean surface 在 `read_file` / `search_text` 上的 integration work package
+* - `pueue_log_clean_validation_work_package.md`
+  - Process asset page
+  - `pueue-log:<id>` clean surface 的 validation / parity work package
 ```
 
 ## 页面目录
@@ -99,4 +108,7 @@ pueue_runtime_substrate_work_package
 pueue_wait_surface_work_package
 pueue_log_handle_surface_work_package
 pueue_validation_and_parity_work_package
+pueue_log_clean_parser_work_package
+pueue_log_clean_surface_integration_work_package
+pueue_log_clean_validation_work_package
 ```

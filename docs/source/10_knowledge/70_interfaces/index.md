@@ -63,6 +63,9 @@
 * - `search_text_ux_contract.md`
   - Source-bearing article
   - 记录 `search_text` 的 grouped search UX contract
+* - `pueue_wait_and_log_handle_contract.md`
+  - Source-bearing article
+  - 记录 `wait_pueue` 与 `pueue-log:<id>` handle 的 accepted contract surface
 ```
 
 ## 页面目录
@@ -75,4 +78,5 @@ apply_patch_semantics
 apply_splice_spec
 read_file_sampled_view_spec
 search_text_ux_contract
+pueue_wait_and_log_handle_contract
 ```

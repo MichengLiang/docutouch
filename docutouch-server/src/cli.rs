@@ -1,12 +1,16 @@
 use crate::patch_adapter::{PatchInvocationAdapter, PatchNumberedEvidenceMode};
 use crate::splice_adapter::SpliceInvocationAdapter;
+use crate::tool_service::{
+    ToolService, resolve_read_surface_path, resolve_search_surface_paths,
+    rewrite_search_text_surface,
+};
 use crate::transport_shell::TransportSourceProvenance;
 use anyhow::Result;
 use docutouch_core::{
     DirectoryListOptions, ReadFileOptions, SearchTextView, TimestampField, list_directory,
     normalize_sampled_view_options, read_file_with_sampled_view, search_text,
 };
-use std::collections::HashSet;
+use serde_json::json;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -20,6 +24,7 @@ enum Command {
     List(ListCommand),
     Read(ReadCommand),
     Search(SearchCommand),
+    WaitPueue(WaitPueueCommand),
     Patch(PatchCommand),
     Splice(SpliceCommand),
 }
@@ -46,6 +51,12 @@ struct SearchCommand {
     paths: Vec<String>,
     rg_args: String,
     view: SearchTextView,
+}
+
+struct WaitPueueCommand {
+    task_ids: Option<Vec<u64>>,
+    mode: Option<String>,
+    timeout_seconds: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -156,6 +167,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         "list" => parse_list_command(&args[1..]).map(Command::List),
         "read" => parse_read_command(&args[1..]).map(Command::Read),
         "search" => parse_search_command(&args[1..]).map(Command::Search),
+        "wait-pueue" => parse_wait_pueue_command(&args[1..]).map(Command::WaitPueue),
         "patch" => parse_patch_command(&args[1..]).map(Command::Patch),
         "splice" => parse_splice_command(&args[1..]).map(Command::Splice),
         other => Err(format!("unknown subcommand: {other}")),
@@ -310,6 +322,41 @@ fn parse_search_command(args: &[String]) -> Result<SearchCommand, String> {
     })
 }
 
+fn parse_wait_pueue_command(args: &[String]) -> Result<WaitPueueCommand, String> {
+    let mut task_ids = Vec::new();
+    let mut mode = None;
+    let mut timeout_seconds = None;
+    let mut index = 0usize;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(value) = arg.strip_prefix("--mode=") {
+            mode = Some(parse_wait_mode(value)?);
+        } else if arg == "--mode" {
+            index += 1;
+            mode = Some(parse_wait_mode(value_at(args, index, "--mode")?)?);
+        } else if let Some(value) = arg.strip_prefix("--timeout-seconds=") {
+            timeout_seconds = Some(parse_positive_f64_flag("--timeout-seconds", value)?);
+        } else if arg == "--timeout-seconds" {
+            index += 1;
+            timeout_seconds = Some(parse_positive_f64_flag(
+                "--timeout-seconds",
+                value_at(args, index, "--timeout-seconds")?,
+            )?);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown wait-pueue flag: {arg}"));
+        } else {
+            task_ids.push(parse_task_id(arg)?);
+        }
+        index += 1;
+    }
+
+    Ok(WaitPueueCommand {
+        task_ids: (!task_ids.is_empty()).then_some(task_ids),
+        mode,
+        timeout_seconds,
+    })
+}
+
 fn parse_patch_command(args: &[String]) -> Result<PatchCommand, String> {
     let mut patch_file = None;
     let mut numbered_evidence_mode = None;
@@ -361,6 +408,7 @@ async fn run_command(command: Command) -> Result<i32> {
         Command::List(command) => run_list(command).await,
         Command::Read(command) => run_read(command).await,
         Command::Search(command) => run_search(command).await,
+        Command::WaitPueue(command) => run_wait_pueue(command).await,
         Command::Patch(command) => run_patch(command).await,
         Command::Splice(command) => run_splice(command).await,
     }
@@ -383,7 +431,10 @@ async fn run_list(command: ListCommand) -> Result<i32> {
 
 async fn run_read(command: ReadCommand) -> Result<i32> {
     let cwd = std::env::current_dir()?;
-    let path = resolve_cli_path(&cwd, &command.path);
+    let path = match resolve_read_surface_path(&command.path, Some(cwd.as_path())).await {
+        Ok(path) => path,
+        Err(error) => return emit_text_result(Err(error.to_string())),
+    };
     let sampled_view = match normalize_sampled_view_options(
         command.sample_step,
         command.sample_lines,
@@ -402,8 +453,10 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
             show_line_numbers: command.show_line_numbers,
         },
         sampled_view,
-    );
-    emit_result(result.map(|value| value.content))
+    )
+    .map(|value| value.content)
+    .map_err(|err| err.to_string());
+    emit_text_result(result)
 }
 
 async fn run_search(command: SearchCommand) -> Result<i32> {
@@ -411,31 +464,43 @@ async fn run_search(command: SearchCommand) -> Result<i32> {
         return emit_result(Err(std::io::Error::other("query cannot be empty")));
     }
     let cwd = std::env::current_dir()?;
-    let mut seen = HashSet::new();
-    let mut search_paths = Vec::new();
-    for raw_path in &command.paths {
-        if raw_path.trim().is_empty() {
-            write_stderr("path cannot contain an empty entry")?;
-            return Ok(1);
-        }
-        let path = resolve_cli_path(&cwd, raw_path);
-        if !path.exists() {
-            write_stderr(&format!("Path does not exist: {}", path.display()))?;
-            return Ok(1);
-        }
-        if seen.insert(path.clone()) {
-            search_paths.push(path);
-        }
-    }
+    let resolved = match resolve_search_surface_paths(
+        &command.paths,
+        Some(cwd.as_path()),
+        Some(cwd.as_path()),
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(error) => return emit_text_result(Err(error.to_string())),
+    };
     let result = search_text(
         &command.query,
-        &search_paths,
+        &resolved.search_paths,
         &command.rg_args,
         command.view,
         Some(cwd.as_path()),
     )
-    .await;
+    .await
+    .map(|rendered| {
+        rewrite_search_text_surface(rendered, &resolved.display_scope, &resolved.path_overrides)
+    });
     emit_text_result(result)
+}
+
+async fn run_wait_pueue(command: WaitPueueCommand) -> Result<i32> {
+    let service = ToolService::for_stdio()?;
+    let arguments = json!({
+        "task_ids": command.task_ids,
+        "mode": command.mode,
+        "timeout_seconds": command.timeout_seconds,
+    });
+    emit_text_result(
+        service
+            .call_json("wait_pueue", arguments)
+            .await
+            .map_err(|error| error.to_string()),
+    )
 }
 
 async fn run_patch(command: PatchCommand) -> Result<i32> {
@@ -593,6 +658,29 @@ fn parse_search_view(value: &str) -> Result<SearchTextView, String> {
     }
 }
 
+fn parse_wait_mode(value: &str) -> Result<String, String> {
+    match value {
+        "any" | "all" => Ok(value.to_string()),
+        _ => Err(format!("--mode must be `any` or `all`, got `{value}`")),
+    }
+}
+
+fn parse_positive_f64_flag(flag: &str, value: &str) -> Result<f64, String> {
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| format!("{flag} requires a positive number"))?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err(format!("{flag} requires a positive number"));
+    }
+    Ok(parsed)
+}
+
+fn parse_task_id(value: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("wait-pueue task IDs must be non-negative integers, got `{value}`"))
+}
+
 fn parse_line_range_text(text: &str) -> Result<(usize, usize), String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -624,7 +712,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `patch`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 

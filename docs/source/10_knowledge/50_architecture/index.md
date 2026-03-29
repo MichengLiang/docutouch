@@ -63,6 +63,9 @@
 * - `cli_adapter_spec.md`
   - Source-bearing article
   - 承载 DocuTouch CLI adapter 的 accepted transport architecture 与 parity boundary
+* - `pueue_task_handle_adapter.md`
+  - Source-bearing article
+  - 承载 Pueue task-handle adapter 的 accepted architecture、placement 与 external-vs-internal boundary
 ```
 
 ## 页面目录
@@ -74,4 +77,5 @@ authoring_contract
 apply_patch_diagnostics_spec
 apply_splice_architecture
 cli_adapter_spec
+pueue_task_handle_adapter
 ```

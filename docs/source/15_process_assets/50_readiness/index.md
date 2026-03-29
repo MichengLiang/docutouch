@@ -73,6 +73,9 @@
 * - `apply_patch_line_number_assist_acceptance_criteria.md`
   - Process asset page
   - `apply_patch` line-number-assisted locking rollout 的 acceptance / QA gate host
+* - `pueue_subagent_kickoff_readiness.md`
+  - Process asset page
+  - Pueue integration implementation 启动前的 readiness gate host
 ```
 
 ## 页面目录
@@ -88,4 +91,5 @@ apply_splice_architecture_diagnostics_and_qa_readiness
 apply_splice_qa_checklist
 apply_splice_engineering_hardening_readiness
 apply_patch_line_number_assist_acceptance_criteria
+pueue_subagent_kickoff_readiness
 ```

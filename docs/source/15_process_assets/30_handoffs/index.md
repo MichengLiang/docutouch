@@ -75,6 +75,18 @@
 * - `apply_splice_presentation_transport_handoff.md`
   - Process asset page
   - `apply_splice` presentation / transport 子流的执行交接包
+* - `pueue_runtime_substrate_handoff.md`
+  - Process asset page
+  - Pueue runtime substrate 子流的执行交接包
+* - `pueue_wait_surface_handoff.md`
+  - Process asset page
+  - `wait_pueue` surface 子流的执行交接包
+* - `pueue_log_handle_surface_handoff.md`
+  - Process asset page
+  - `pueue-log:<id>` handle 子流的执行交接包
+* - `pueue_validation_and_parity_handoff.md`
+  - Process asset page
+  - parity / validation / readiness 收口子流的执行交接包
 ```
 
 ## 页面目录
@@ -90,4 +102,8 @@ apply_splice_selection_resolution_handoff
 apply_splice_shared_substrate_handoff
 apply_splice_runtime_handoff
 apply_splice_presentation_transport_handoff
+pueue_runtime_substrate_handoff
+pueue_wait_surface_handoff
+pueue_log_handle_surface_handoff
+pueue_validation_and_parity_handoff
 ```

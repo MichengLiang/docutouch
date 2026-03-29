@@ -1,4 +1,8 @@
 use crate::patch_adapter::{PatchInvocationAdapter, PatchSourceProvenance};
+use crate::pueue::{
+    PueueError, PueueRuntime, PueueTaskSnapshot, PueueWaitSnapshot, WaitMode, WaitReason,
+    format_task_log_handle, parse_task_log_handle,
+};
 use crate::splice_adapter::SpliceInvocationAdapter;
 use anyhow::Result;
 use docutouch_core::{
@@ -10,10 +14,13 @@ use docutouch_core::{
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
 use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::process::Command as TokioCommand;
 use tokio::sync::RwLock;
 
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
@@ -130,6 +137,21 @@ pub struct SearchTextArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitPueueArgs {
+    #[schemars(
+        description = "可选 task id 列表。缺省时，等待调用开始瞬间当前所有未完成 task 的快照。"
+    )]
+    #[serde(default)]
+    pub task_ids: Option<Vec<u64>>,
+    #[schemars(description = "等待模式。只允许 `any` 或 `all`；默认 `any`。")]
+    #[serde(default)]
+    pub mode: Option<WaitModeInput>,
+    #[schemars(description = "可选超时秒数。必须为正数；缺省时读取 runtime default。")]
+    #[serde(default)]
+    pub timeout_seconds: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SearchTextPathInput {
     One(String),
@@ -144,6 +166,13 @@ pub enum SearchTextViewInput {
     Full,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitModeInput {
+    Any,
+    All,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TimestampFieldInput {
@@ -153,7 +182,21 @@ pub enum TimestampFieldInput {
 
 #[derive(Debug)]
 pub struct ServiceError {
+    kind: ServiceErrorKind,
     message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServiceErrorKind {
+    InvalidArgument,
+    ToolFailure,
+}
+
+#[derive(Debug)]
+pub(crate) struct ResolvedSearchTextPaths {
+    pub search_paths: Vec<PathBuf>,
+    pub display_scope: String,
+    pub path_overrides: Vec<(String, String)>,
 }
 
 impl ToolService {
@@ -190,6 +233,10 @@ impl ToolService {
             "search_text" => {
                 let args = parse_json_args::<SearchTextArgs>(arguments)?;
                 self.search_text_impl(args).await
+            }
+            "wait_pueue" => {
+                let args = parse_json_args::<WaitPueueArgs>(arguments)?;
+                self.wait_pueue_impl(args).await
             }
             "apply_patch" => {
                 let args = parse_json_args::<ApplyPatchArgs>(arguments)?;
@@ -245,7 +292,9 @@ impl ToolService {
 
     async fn read_file_impl(&self, args: ReadFileArgs) -> Result<String, ServiceError> {
         let _guard = self.execution_lock.read().await;
-        let file_path = self.resolve_path(&args.relative_path).await?;
+        let workspace = self.workspace.read().await.clone();
+        let file_path =
+            resolve_read_surface_path(&args.relative_path, workspace.as_deref()).await?;
         let line_range =
             normalize_line_range(args.line_range).map_err(ServiceError::invalid_argument)?;
         let sampled_view =
@@ -273,16 +322,54 @@ impl ToolService {
 
         let _guard = self.execution_lock.read().await;
         let display_base_dir = self.workspace.read().await.clone();
-        let search_paths = self.resolve_search_text_paths(&args.path).await?;
-        search_text(
+        let raw_paths = args
+            .path
+            .paths()
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let resolved = resolve_search_surface_paths(
+            &raw_paths,
+            display_base_dir.as_deref(),
+            display_base_dir.as_deref(),
+        )
+        .await?;
+        let rendered = search_text(
             &args.query,
-            &search_paths,
+            &resolved.search_paths,
             &args.rg_args,
             args.view.into(),
             display_base_dir.as_deref(),
         )
         .await
-        .map_err(ServiceError::invalid_argument)
+        .map_err(ServiceError::invalid_argument)?;
+        Ok(rewrite_search_text_surface(
+            rendered,
+            &resolved.display_scope,
+            &resolved.path_overrides,
+        ))
+    }
+
+    async fn wait_pueue_impl(&self, args: WaitPueueArgs) -> Result<String, ServiceError> {
+        let runtime = PueueRuntime::from_env().map_err(map_pueue_runtime_error)?;
+        let mode = args.mode.unwrap_or(WaitModeInput::Any).into();
+        let resolved_task_ids = match args.task_ids {
+            Some(task_ids) => runtime
+                .resolve_explicit_task_ids(&task_ids)
+                .await
+                .map_err(map_wait_argument_error)?,
+            None => runtime
+                .snapshot_unfinished_task_ids()
+                .await
+                .map_err(map_pueue_runtime_error)?,
+        };
+        let timeout = resolve_wait_timeout(args.timeout_seconds, runtime.default_timeout())?;
+        let snapshot = runtime
+            .wait_for_tasks(&resolved_task_ids, mode, timeout)
+            .await
+            .map_err(map_wait_execution_error)?;
+        let current_time = current_time_surface().await;
+        Ok(format_wait_pueue_output(mode, &snapshot, &current_time))
     }
 
     async fn apply_patch_impl(&self, patch: String) -> Result<String, ServiceError> {
@@ -301,41 +388,9 @@ impl ToolService {
             .map_err(ServiceError::splice_apply_failed)
     }
 
-    async fn resolve_search_text_paths(
-        &self,
-        input: &SearchTextPathInput,
-    ) -> Result<Vec<PathBuf>, ServiceError> {
-        let mut resolved = Vec::new();
-        let mut seen = HashSet::new();
-        for raw_path in input.paths() {
-            if raw_path.trim().is_empty() {
-                return Err(ServiceError::invalid_argument(
-                    "path cannot contain an empty entry",
-                ));
-            }
-            let path = self.resolve_path(raw_path).await?;
-            if !path.exists() {
-                return Err(ServiceError::path_not_found(format!(
-                    "Path does not exist: {}",
-                    path.display()
-                )));
-            }
-            if seen.insert(path.clone()) {
-                resolved.push(path);
-            }
-        }
-        Ok(resolved)
-    }
-
     async fn resolve_path(&self, raw_path: &str) -> Result<PathBuf, ServiceError> {
-        let path = PathBuf::from(raw_path);
-        if path.is_absolute() {
-            return Ok(path);
-        }
-
         let workspace = self.workspace.read().await;
-        let workspace = workspace.as_ref().ok_or_else(relative_workspace_error)?;
-        Ok(workspace.join(path))
+        resolve_user_path(raw_path, workspace.as_deref())
     }
 
     async fn resolve_patch_invocation(
@@ -411,35 +466,60 @@ impl From<SearchTextViewInput> for SearchTextView {
     }
 }
 
+impl From<WaitModeInput> for WaitMode {
+    fn from(value: WaitModeInput) -> Self {
+        match value {
+            WaitModeInput::Any => WaitMode::Any,
+            WaitModeInput::All => WaitMode::All,
+        }
+    }
+}
+
 impl ServiceError {
     pub fn invalid_argument(message: impl Into<String>) -> Self {
         Self {
+            kind: ServiceErrorKind::InvalidArgument,
             message: message.into(),
         }
     }
 
     pub fn tool_not_found(message: impl Into<String>) -> Self {
         Self {
+            kind: ServiceErrorKind::InvalidArgument,
             message: message.into(),
         }
     }
 
     pub fn path_not_found(message: impl Into<String>) -> Self {
         Self {
+            kind: ServiceErrorKind::InvalidArgument,
             message: message.into(),
         }
     }
 
     pub fn patch_apply_failed(message: impl Into<String>) -> Self {
         Self {
+            kind: ServiceErrorKind::InvalidArgument,
             message: message.into(),
         }
     }
 
     pub fn splice_apply_failed(message: impl Into<String>) -> Self {
         Self {
+            kind: ServiceErrorKind::InvalidArgument,
             message: message.into(),
         }
+    }
+
+    pub fn tool_failure(message: impl Into<String>) -> Self {
+        Self {
+            kind: ServiceErrorKind::ToolFailure,
+            message: message.into(),
+        }
+    }
+
+    pub fn kind(&self) -> ServiceErrorKind {
+        self.kind
     }
 }
 
@@ -470,6 +550,10 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     tools.push(build_mcp_tool::<SearchTextArgs>(
         "search_text",
         SEARCH_TEXT_TOOL_DESCRIPTION,
+    )?);
+    tools.push(build_mcp_tool::<WaitPueueArgs>(
+        "wait_pueue",
+        "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。缺省时对调用开始瞬间的未完成 task 快照进行等待；完成后返回可继续交给 `read_file` / `search_text` 的 `log_handle`。",
     )?);
     tools.push(build_mcp_tool::<ApplyPatchArgs>(
         "apply_patch",
@@ -559,6 +643,19 @@ fn map_read_error(err: std::io::Error) -> ServiceError {
     ServiceError::invalid_argument(message)
 }
 
+fn map_pueue_log_handle_error(err: PueueError) -> ServiceError {
+    match err {
+        PueueError::InvalidHandle(message) => ServiceError::invalid_argument(message),
+        PueueError::TaskDoesNotExist(task_id) => {
+            ServiceError::invalid_argument(format!("Task does not exist: {task_id}"))
+        }
+        PueueError::TaskLogUnavailable(task_id) => {
+            ServiceError::invalid_argument(format!("Task log not available: {task_id}"))
+        }
+        other => ServiceError::tool_failure(other.to_string()),
+    }
+}
+
 fn map_timestamp_field(field: TimestampFieldInput) -> TimestampField {
     match field {
         TimestampFieldInput::Created => TimestampField::Created,
@@ -570,10 +667,418 @@ fn relative_workspace_error() -> ServiceError {
     ServiceError::invalid_argument(relative_path_requires_workspace_message())
 }
 
+fn resolve_wait_timeout(
+    timeout_seconds: Option<f64>,
+    default_timeout: Option<Duration>,
+) -> Result<Duration, ServiceError> {
+    match timeout_seconds {
+        Some(seconds) => duration_from_seconds(seconds),
+        None => Ok(default_timeout.unwrap_or(Duration::MAX)),
+    }
+}
+
+fn duration_from_seconds(seconds: f64) -> Result<Duration, ServiceError> {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err(ServiceError::invalid_argument(
+            "timeout_seconds must be a positive number",
+        ));
+    }
+    Ok(Duration::from_secs_f64(seconds))
+}
+
+fn map_wait_argument_error(err: PueueError) -> ServiceError {
+    match err {
+        PueueError::InvalidTimeout(message) | PueueError::InvalidHandle(message) => {
+            ServiceError::invalid_argument(message)
+        }
+        PueueError::TaskDoesNotExist(task_id) => {
+            ServiceError::invalid_argument(format!("Task does not exist: {task_id}"))
+        }
+        PueueError::TaskLogUnavailable(task_id) => {
+            ServiceError::invalid_argument(format!("Task log not available: {task_id}"))
+        }
+        other => ServiceError::tool_failure(other.to_string()),
+    }
+}
+
+fn map_wait_execution_error(err: PueueError) -> ServiceError {
+    match err {
+        PueueError::TaskDoesNotExist(task_id) => {
+            ServiceError::invalid_argument(format!("Task does not exist: {task_id}"))
+        }
+        PueueError::InvalidTimeout(message) => ServiceError::invalid_argument(message),
+        other => ServiceError::tool_failure(other.to_string()),
+    }
+}
+
+fn map_pueue_runtime_error(err: PueueError) -> ServiceError {
+    match err {
+        PueueError::InvalidTimeout(message) => ServiceError::invalid_argument(message),
+        other => ServiceError::tool_failure(other.to_string()),
+    }
+}
+
+fn format_wait_pueue_output(
+    mode: WaitMode,
+    snapshot: &PueueWaitSnapshot,
+    current_time: &str,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("wait_pueue:".to_string());
+    lines.push(format!("reason: {}", wait_reason_label(snapshot.reason)));
+    lines.push(format!("mode: {}", wait_mode_label(mode)));
+    push_task_id_line(&mut lines, "resolved_task_ids", &snapshot.resolved_task_ids);
+    if !snapshot.triggered_task_ids.is_empty() {
+        push_task_id_line(
+            &mut lines,
+            "triggered_task_ids",
+            &snapshot.triggered_task_ids,
+        );
+    }
+    if !snapshot.pending_task_ids.is_empty() {
+        push_task_id_line(&mut lines, "pending_task_ids", &snapshot.pending_task_ids);
+    }
+    lines.push(format!(
+        "waited_seconds: {:.1}",
+        snapshot.waited.as_secs_f64()
+    ));
+    lines.push(format!("current_time: {current_time}"));
+
+    if !snapshot.terminal_tasks.is_empty() {
+        lines.push(String::new());
+        for (index, task) in snapshot.terminal_tasks.iter().enumerate() {
+            if index > 0 {
+                lines.push(String::new());
+            }
+            let (status, exit_code) = summarize_terminal_task(task);
+            lines.push(format!("[{}] task {}", index + 1, task.id));
+            lines.push(format!("  status: {status}"));
+            if let Some(exit_code) = exit_code {
+                lines.push(format!("  exit_code: {exit_code}"));
+            }
+            lines.push(format!("  log_handle: {}", format_task_log_handle(task.id)));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn push_task_id_line(lines: &mut Vec<String>, label: &str, task_ids: &[u64]) {
+    if task_ids.is_empty() {
+        lines.push(format!("{label}:"));
+    } else {
+        let rendered = task_ids
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("{label}: {rendered}"));
+    }
+}
+
+fn wait_mode_label(mode: WaitMode) -> &'static str {
+    match mode {
+        WaitMode::Any => "any",
+        WaitMode::All => "all",
+    }
+}
+
+fn wait_reason_label(reason: WaitReason) -> &'static str {
+    match reason {
+        WaitReason::TaskFinished => "task_finished",
+        WaitReason::AllFinished => "all_finished",
+        WaitReason::Timeout => "timeout",
+        WaitReason::NothingToWaitFor => "nothing_to_wait_for",
+    }
+}
+
+fn summarize_terminal_task(task: &PueueTaskSnapshot) -> (String, Option<i64>) {
+    let Some(detail) = task.status.detail.as_ref() else {
+        return (task.status.name.clone(), None);
+    };
+    let (status, exit_code) = extract_terminal_summary(detail);
+    (
+        status.unwrap_or_else(|| task.status.name.clone()),
+        exit_code,
+    )
+}
+
+fn extract_terminal_summary(detail: &Value) -> (Option<String>, Option<i64>) {
+    let direct_exit_code = extract_exit_code(detail);
+    if let Some(result) = detail.get("result") {
+        let (status, nested_exit_code) = extract_status_and_exit_code(result);
+        if status.is_some() || nested_exit_code.is_some() {
+            let exit_code = direct_exit_code
+                .or(nested_exit_code)
+                .or_else(|| status.as_deref().and_then(infer_exit_code));
+            return (status, exit_code);
+        }
+    }
+
+    let (status, nested_exit_code) = extract_status_and_exit_code(detail);
+    let exit_code = direct_exit_code
+        .or(nested_exit_code)
+        .or_else(|| status.as_deref().and_then(infer_exit_code));
+    (status, exit_code)
+}
+
+fn extract_status_and_exit_code(value: &Value) -> (Option<String>, Option<i64>) {
+    match value {
+        Value::String(status) => (Some(status.clone()), None),
+        Value::Object(object) if object.len() == 1 => {
+            let (status, detail) = object.iter().next().expect("single-entry object");
+            (Some(status.clone()), extract_exit_code(detail))
+        }
+        _ => (None, extract_exit_code(value)),
+    }
+}
+
+fn extract_exit_code(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(number) => number.as_i64(),
+        Value::Object(object) => object
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .or_else(|| object.get("code").and_then(Value::as_i64)),
+        _ => None,
+    }
+}
+
+fn infer_exit_code(status: &str) -> Option<i64> {
+    (status == "Success").then_some(0)
+}
+
+async fn current_time_surface() -> String {
+    shell_current_time_surface()
+        .await
+        .unwrap_or_else(format_utc_now_surface)
+}
+
+#[cfg(windows)]
+async fn shell_current_time_surface() -> Option<String> {
+    let output = TokioCommand::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-Date -Format 'yyyy-MM-dd HH:mm:ss'",
+        ])
+        .output()
+        .await
+        .ok()?;
+    normalize_current_time_output(output)
+}
+
+#[cfg(not(windows))]
+async fn shell_current_time_surface() -> Option<String> {
+    let output = TokioCommand::new("date")
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+        .await
+        .ok()?;
+    normalize_current_time_output(output)
+}
+
+fn normalize_current_time_output(output: std::process::Output) -> Option<String> {
+    if !output.status.success() {
+        return None;
+    }
+    let rendered = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    is_current_time_surface(&rendered).then_some(rendered)
+}
+
+fn is_current_time_surface(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 19
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b' '
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7 | 10 | 13 | 16) || byte.is_ascii_digit())
+}
+
+fn format_utc_now_surface() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs() as i64;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
+}
+
 fn relative_path_requires_workspace_message() -> String {
     format!(
         "Relative path requires workspace. Call set_workspace first, set {DEFAULT_WORKSPACE_ENV}, or use an absolute path."
     )
+}
+
+pub(crate) async fn resolve_read_surface_path(
+    raw_path: &str,
+    workspace: Option<&Path>,
+) -> Result<PathBuf, ServiceError> {
+    if let Some(path) = try_resolve_pueue_log_handle(raw_path).await? {
+        return Ok(path);
+    }
+    resolve_user_path(raw_path, workspace)
+}
+
+pub(crate) async fn resolve_search_surface_paths(
+    raw_paths: &[String],
+    workspace: Option<&Path>,
+    display_base_dir: Option<&Path>,
+) -> Result<ResolvedSearchTextPaths, ServiceError> {
+    let mut search_paths = Vec::new();
+    let mut display_labels = Vec::new();
+    let mut path_overrides = Vec::new();
+    let mut seen = HashSet::new();
+
+    for raw_path in raw_paths {
+        if raw_path.trim().is_empty() {
+            return Err(ServiceError::invalid_argument(
+                "path cannot contain an empty entry",
+            ));
+        }
+
+        let handle_task_id = parse_task_log_handle(raw_path).map_err(map_pueue_log_handle_error)?;
+        let resolved_path = if let Some(task_id) = handle_task_id {
+            resolve_task_log_path(task_id).await?
+        } else {
+            let path = resolve_user_path(raw_path, workspace)?;
+            if !path.exists() {
+                return Err(ServiceError::path_not_found(format!(
+                    "Path does not exist: {}",
+                    path.display()
+                )));
+            }
+            path
+        };
+
+        if seen.insert(resolved_path.clone()) {
+            let display_path = display_path_for_output(display_base_dir, &resolved_path);
+            let display_label = handle_task_id
+                .map(format_task_log_handle)
+                .unwrap_or_else(|| display_path.clone());
+            if display_label != display_path {
+                path_overrides.push((display_path, display_label.clone()));
+            }
+            search_paths.push(resolved_path);
+            display_labels.push(display_label);
+        }
+    }
+
+    Ok(ResolvedSearchTextPaths {
+        search_paths,
+        display_scope: format_display_scope(&display_labels),
+        path_overrides,
+    })
+}
+
+pub(crate) fn rewrite_search_text_surface(
+    rendered: String,
+    display_scope: &str,
+    path_overrides: &[(String, String)],
+) -> String {
+    rendered
+        .lines()
+        .map(|line| {
+            if line.starts_with("scope: ") {
+                return format!("scope: {display_scope}");
+            }
+            if !line.starts_with('[') {
+                return line.to_string();
+            }
+
+            let mut updated = line.to_string();
+            for (resolved_path, display_path) in path_overrides {
+                let needle = format!("{resolved_path} (");
+                if updated.contains(&needle) {
+                    updated = updated.replacen(&needle, &format!("{display_path} ("), 1);
+                    break;
+                }
+            }
+            updated
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(crate) fn display_path_for_output(display_base_dir: Option<&Path>, path: &Path) -> String {
+    let path = normalize_display_path(path);
+    if let Some(base_dir) = display_base_dir {
+        let base_dir = normalize_display_path(base_dir);
+        if let Ok(relative) = path.strip_prefix(&base_dir)
+            && !relative.as_os_str().is_empty()
+        {
+            return normalize_display_text(&relative.display().to_string());
+        }
+    }
+    normalize_display_text(&path.display().to_string())
+}
+
+pub(crate) fn format_display_scope(display_paths: &[String]) -> String {
+    if display_paths.len() == 1 {
+        return display_paths[0].clone();
+    }
+    format!("[{}]", display_paths.join(", "))
+}
+
+fn normalize_display_path(path: &Path) -> PathBuf {
+    PathBuf::from(strip_windows_verbatim_prefix(&path.display().to_string()))
+}
+
+fn strip_windows_verbatim_prefix(raw: &str) -> String {
+    raw.strip_prefix(r"\\?\").unwrap_or(raw).to_string()
+}
+
+fn normalize_display_text(raw: &str) -> String {
+    raw.replace('\\', "/")
+}
+
+fn resolve_user_path(raw_path: &str, workspace: Option<&Path>) -> Result<PathBuf, ServiceError> {
+    let path = PathBuf::from(raw_path);
+    if path.is_absolute() {
+        return Ok(path);
+    }
+
+    let workspace = workspace.ok_or_else(relative_workspace_error)?;
+    Ok(workspace.join(path))
+}
+
+async fn try_resolve_pueue_log_handle(raw_path: &str) -> Result<Option<PathBuf>, ServiceError> {
+    let Some(task_id) = parse_task_log_handle(raw_path).map_err(map_pueue_log_handle_error)? else {
+        return Ok(None);
+    };
+    resolve_task_log_path(task_id).await.map(Some)
+}
+
+async fn resolve_task_log_path(task_id: u64) -> Result<PathBuf, ServiceError> {
+    PueueRuntime::from_env()
+        .map_err(map_pueue_runtime_error)?
+        .resolve_task_log_path(task_id)
+        .await
+        .map_err(map_pueue_log_handle_error)
 }
 
 pub fn validate_workspace_path(path: &Path) -> Result<PathBuf, String> {

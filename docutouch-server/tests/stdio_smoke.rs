@@ -3,7 +3,9 @@ mod support;
 
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
+use serde_json::Value;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use support::json_object;
 
 const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
@@ -84,6 +86,193 @@ fn splice_text() -> String {
     "*** Begin Splice\n*** Copy From File: source.txt\n@@\n1 | alpha\n*** Append To File: dest.txt\n*** End Splice\n".to_string()
 }
 
+struct PueueStubFixture {
+    bin_path: PathBuf,
+    runtime_dir: PathBuf,
+    plan_path: PathBuf,
+    counter_path: PathBuf,
+}
+
+impl PueueStubFixture {
+    fn new(base_dir: &Path, snapshots: &[Value], logs: &[(u64, &str)]) -> anyhow::Result<Self> {
+        let runtime_dir = base_dir.join("pueue-runtime");
+        let tool_dir = base_dir.join("pueue-stub");
+        let task_logs_dir = runtime_dir.join("task_logs");
+        std::fs::create_dir_all(&task_logs_dir)?;
+        std::fs::create_dir_all(&tool_dir)?;
+
+        for (task_id, contents) in logs {
+            std::fs::write(task_logs_dir.join(format!("{task_id}.log")), contents)?;
+        }
+
+        let plan_path = tool_dir.join("plan.json");
+        let counter_path = tool_dir.join("counter.txt");
+        std::fs::write(&plan_path, json!({ "snapshots": snapshots }).to_string())?;
+        std::fs::write(&counter_path, "0")?;
+
+        let script_path = tool_dir.join("pueue_stub.py");
+        std::fs::write(
+            &script_path,
+            r#"import json
+import os
+import pathlib
+import sys
+
+
+def main() -> int:
+    if sys.argv[1:] != ["status", "--json"]:
+        print(f"unsupported pueue stub args: {sys.argv[1:]}", file=sys.stderr)
+        return 1
+
+    plan_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_PLAN"])
+    counter_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_COUNTER"])
+    snapshots = json.loads(plan_path.read_text(encoding="utf-8"))["snapshots"]
+
+    counter = 0
+    if counter_path.exists():
+        raw_counter = counter_path.read_text(encoding="utf-8").strip()
+        if raw_counter:
+            counter = int(raw_counter)
+
+    snapshot_index = min(counter, len(snapshots) - 1)
+    counter_path.write_text(str(counter + 1), encoding="utf-8")
+    sys.stdout.write(json.dumps(snapshots[snapshot_index]))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"#,
+        )?;
+
+        let bin_path = if cfg!(windows) {
+            let powershell_path = tool_dir.join("pueue_stub.ps1");
+            std::fs::write(
+                &powershell_path,
+                r#"$ErrorActionPreference = 'Stop'
+if ($args.Count -ne 2 -or $args[0] -ne 'status' -or $args[1] -ne '--json') {
+    [Console]::Error.WriteLine("unsupported pueue stub args: $args")
+    exit 1
+}
+
+$planPath = $env:DOCUTOUCH_TEST_PUEUE_PLAN
+$counterPath = $env:DOCUTOUCH_TEST_PUEUE_COUNTER
+$snapshots = (Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json).snapshots
+
+$counter = 0
+if (Test-Path -LiteralPath $counterPath) {
+    $rawCounter = (Get-Content -LiteralPath $counterPath -Raw).Trim()
+    if ($rawCounter) {
+        $counter = [int]$rawCounter
+    }
+}
+
+$snapshotIndex = [Math]::Min($counter, $snapshots.Count - 1)
+Set-Content -LiteralPath $counterPath -Value ($counter + 1) -NoNewline
+[Console]::Out.Write(($snapshots[$snapshotIndex] | ConvertTo-Json -Compress -Depth 32))
+"#,
+            )?;
+            let bin_path = tool_dir.join("pueue.cmd");
+            std::fs::write(
+                &bin_path,
+                "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0pueue_stub.ps1\" %*\r\n",
+            )?;
+            bin_path
+        } else {
+            let bin_path = tool_dir.join("pueue");
+            std::fs::write(
+                &bin_path,
+                "#!/usr/bin/env sh\nuv run python \"$(dirname \"$0\")/pueue_stub.py\" \"$@\"\n",
+            )?;
+            set_executable(&bin_path)?;
+            bin_path
+        };
+
+        Ok(Self {
+            bin_path,
+            runtime_dir,
+            plan_path,
+            counter_path,
+        })
+    }
+
+    fn configure_command(&self, command: &mut tokio::process::Command) {
+        command.env("DOCUTOUCH_PUEUE_BIN", &self.bin_path);
+        command.env("DOCUTOUCH_PUEUE_RUNTIME_DIR", &self.runtime_dir);
+        command.env("DOCUTOUCH_TEST_PUEUE_PLAN", &self.plan_path);
+        command.env("DOCUTOUCH_TEST_PUEUE_COUNTER", &self.counter_path);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_executable(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_executable(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn running_task(task_id: u64) -> Value {
+    json!({
+        "id": task_id,
+        "status": {
+            "Running": {
+                "start": "now"
+            }
+        }
+    })
+}
+
+fn done_task(task_id: u64, status: &str, exit_code: i64) -> Value {
+    json!({
+        "id": task_id,
+        "status": {
+            "Done": {
+                "result": status,
+                "exit_code": exit_code
+            }
+        }
+    })
+}
+
+fn status_snapshot(tasks: Vec<Value>) -> Value {
+    let mut map = serde_json::Map::new();
+    for task in tasks {
+        let task_id = task
+            .get("id")
+            .and_then(Value::as_u64)
+            .expect("task id for stub snapshot");
+        map.insert(task_id.to_string(), task);
+    }
+    Value::Object(
+        [("tasks".to_string(), Value::Object(map))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn assert_current_time_surface(output: &str) {
+    let line = output
+        .lines()
+        .find(|line| line.starts_with("current_time: "))
+        .expect("current_time header");
+    let value = &line["current_time: ".len()..];
+    let bytes = value.as_bytes();
+    assert_eq!(bytes.len(), 19, "unexpected current_time surface: {value}");
+    assert_eq!(bytes[4], b'-');
+    assert_eq!(bytes[7], b'-');
+    assert_eq!(bytes[10], b' ');
+    assert_eq!(bytes[13], b':');
+    assert_eq!(bytes[16], b':');
+}
+
 #[tokio::test]
 async fn server_lists_expected_tools() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
@@ -107,12 +296,207 @@ async fn server_lists_expected_tools() -> anyhow::Result<()> {
         assert!(tool_names.contains(&"list_directory".to_string()));
         assert!(tool_names.contains(&"read_file".to_string()));
         assert!(tool_names.contains(&"search_text".to_string()));
+        assert!(tool_names.contains(&"wait_pueue".to_string()));
         assert!(!tool_names.contains(&"read_files".to_string()));
         assert!(tool_names.contains(&"apply_patch".to_string()));
         assert!(tool_names.contains(&"apply_splice".to_string()));
 
         Ok(())
     })
+}
+
+#[tokio::test]
+async fn server_wait_pueue_empty_explicit_task_set_returns_nothing_to_wait_for()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "wait_pueue".into(),
+                arguments: Some(json_object(json!({
+                    "task_ids": []
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("reason: nothing_to_wait_for"));
+        assert!(text.contains("mode: any"));
+        assert!(text.contains("resolved_task_ids:"));
+        assert!(!text.contains("triggered_task_ids:"));
+        assert!(!text.contains("pending_task_ids:"));
+        assert!(!text.contains("log_handle:"));
+        assert_current_time_surface(text);
+        assert!(text.contains("waited_seconds: 0.0"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_wait_pueue_invalid_timeout_is_reported_as_invalid_argument() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "wait_pueue".into(),
+                arguments: Some(json_object(json!({
+                    "task_ids": [],
+                    "timeout_seconds": 0
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("non-positive timeout should be rejected");
+        assert!(
+            err.to_string()
+                .contains("timeout_seconds must be a positive number")
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_read_file_accepts_pueue_log_handle_without_metadata_header() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = PueueStubFixture::new(
+        temp.path(),
+        &[status_snapshot(vec![done_task(42, "Success", 0)])],
+        &[(42, "alpha\nbeta\n")],
+    )?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            let result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({
+                        "relative_path": "pueue-log:42"
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert_eq!(text, "alpha\nbeta\n");
+            assert!(!text.contains("pueue-log:42"));
+            assert!(!text.contains("task_logs"));
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_search_text_accepts_pueue_log_handle_in_path_arrays() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.txt"), "alpha\n")?;
+    let fixture = PueueStubFixture::new(
+        temp.path(),
+        &[status_snapshot(vec![done_task(42, "Success", 0)])],
+        &[(42, "alpha\n")],
+    )?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            client
+                .call_tool(support::workspace_tool_call(temp.path()))
+                .await?;
+            let result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "search_text".into(),
+                    arguments: Some(json_object(json!({
+                        "query": "alpha",
+                        "path": ["pueue-log:42", "notes.txt"],
+                        "view": "full"
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains("search_text[full]:"));
+            assert!(text.contains("scope: [pueue-log:42, notes.txt]"));
+            assert!(text.contains("pueue-log:42 (1 line, 1 match)"));
+            assert!(text.contains("notes.txt (1 line, 1 match)"));
+            assert!(!text.contains("task_logs/42.log"));
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_read_file_reports_missing_pueue_task_truthfully() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = PueueStubFixture::new(temp.path(), &[status_snapshot(vec![])], &[])?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            let err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "read_file".into(),
+                    arguments: Some(json_object(json!({
+                        "relative_path": "pueue-log:99"
+                    }))),
+                    task: None,
+                })
+                .await
+                .expect_err("missing task should fail");
+            assert!(err.to_string().contains("Task does not exist: 99"));
+            Ok(())
+        }
+    )
+}
+
+#[tokio::test]
+async fn server_search_text_reports_missing_pueue_log_truthfully() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture =
+        PueueStubFixture::new(temp.path(), &[status_snapshot(vec![running_task(41)])], &[])?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+        },
+        client,
+        {
+            let err = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "search_text".into(),
+                    arguments: Some(json_object(json!({
+                        "query": "alpha",
+                        "path": "pueue-log:41"
+                    }))),
+                    task: None,
+                })
+                .await
+                .expect_err("missing log should fail");
+            assert!(err.to_string().contains("Task log not available: 41"));
+            Ok(())
+        }
+    )
 }
 
 #[tokio::test]
@@ -1345,12 +1729,14 @@ async fn server_reports_patch_failure_with_persisted_patch_source() -> anyhow::R
 }
 
 #[tokio::test]
-async fn server_default_header_only_treats_dense_numbered_old_side_as_literal_text(
-) -> anyhow::Result<()> {
+async fn server_default_header_only_treats_dense_numbered_old_side_as_literal_text()
+-> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
     with_server_client!(temp.path(), client, {
-        client.call_tool(support::workspace_tool_call(temp.path())).await?;
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
 
         let err = client
             .call_tool(CallToolRequestParams {
@@ -1375,12 +1761,18 @@ async fn server_default_header_only_treats_dense_numbered_old_side_as_literal_te
 async fn server_env_full_enables_dense_numbered_old_side_evidence() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("app.py"), "value = 1\n")?;
-    with_server_client!(temp.path(), |cmd| {
-        cmd.env("DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE", "full");
-    }, client, {
-        client.call_tool(support::workspace_tool_call(temp.path())).await?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            cmd.env("DOCUTOUCH_APPLY_PATCH_NUMBERED_EVIDENCE_MODE", "full");
+        },
+        client,
+        {
+            client
+                .call_tool(support::workspace_tool_call(temp.path()))
+                .await?;
 
-        let patch_result = client
+            let patch_result = client
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
@@ -1391,11 +1783,15 @@ async fn server_env_full_enables_dense_numbered_old_side_evidence() -> anyhow::R
             })
             .await?;
 
-        let message = &patch_result.content[0].as_text().unwrap().text;
-        assert!(message.contains("Success. Updated the following files:"));
-        assert_eq!(std::fs::read_to_string(temp.path().join("app.py"))?, "value = 2\n");
-        Ok(())
-    })
+            let message = &patch_result.content[0].as_text().unwrap().text;
+            assert!(message.contains("Success. Updated the following files:"));
+            assert_eq!(
+                std::fs::read_to_string(temp.path().join("app.py"))?,
+                "value = 2\n"
+            );
+            Ok(())
+        }
+    )
 }
 
 #[tokio::test]

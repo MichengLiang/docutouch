@@ -60,6 +60,9 @@
 * - `testing_and_tool_admission.md`
   - Source-bearing article
   - 记录测试分层、回归义务与新增工具准入标准
+* - `pueue_integration_runtime_and_validation.md`
+  - Source-bearing article
+  - 记录 Pueue integration 的 runtime assumptions、configuration facts 与 validation obligations
 ```
 
 ## 页面目录
@@ -71,4 +74,5 @@ authoring_contract
 maintenance_priorities
 upstream_sync_and_compatibility
 testing_and_tool_admission
+pueue_integration_runtime_and_validation
 ```

@@ -70,6 +70,18 @@
 * - `apply_patch_line_number_assist_baseline_locking_work_package.md`
   - Process asset page
   - `apply_patch` line-number-assisted locking broad implementation 之前的基线锁定工作包
+* - `pueue_runtime_substrate_work_package.md`
+  - Process asset page
+  - Pueue runtime substrate 与 task-log resolver 的 implementation work package
+* - `pueue_wait_surface_work_package.md`
+  - Process asset page
+  - `wait_pueue` MCP / CLI surface 的 implementation work package
+* - `pueue_log_handle_surface_work_package.md`
+  - Process asset page
+  - `pueue-log:<id>` 在 `read_file` / `search_text` 上的 implementation work package
+* - `pueue_validation_and_parity_work_package.md`
+  - Process asset page
+  - Pueue integration 的 parity / validation / kickoff 收口 work package
 ```
 
 ## 页面目录
@@ -83,4 +95,8 @@ work_package_minimal_example
 apply_splice_baseline_locking_work_package
 apply_splice_deeper_substrate_extraction_work_package
 apply_patch_line_number_assist_baseline_locking_work_package
+pueue_runtime_substrate_work_package
+pueue_wait_surface_work_package
+pueue_log_handle_surface_work_package
+pueue_validation_and_parity_work_package
 ```

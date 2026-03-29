@@ -53,7 +53,14 @@ impl ServerHandler for DocuTouchServer {
             .service
             .call_mcp_tool(request.name.as_ref(), request.arguments)
             .await
-            .map_err(|message| McpError::invalid_params(message.to_string(), None))?;
+            .map_err(|error| match error.kind() {
+                crate::tool_service::ServiceErrorKind::InvalidArgument => {
+                    McpError::invalid_params(error.to_string(), None)
+                }
+                crate::tool_service::ServiceErrorKind::ToolFailure => {
+                    McpError::internal_error(error.to_string(), None)
+                }
+            })?;
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }

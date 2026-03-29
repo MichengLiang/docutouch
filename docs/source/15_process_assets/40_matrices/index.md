@@ -64,6 +64,9 @@
 * - `apply_patch_line_number_assist_implementation_stream_matrix.md`
   - Process asset page
   - `apply_patch` line-number-assisted locking rollout 的 implementation streams 关系矩阵
+* - `pueue_integration_execution_matrix.md`
+  - Process asset page
+  - Pueue integration 的 stream / file / dependency / handoff 关系矩阵
 ```
 
 ## 页面目录
@@ -76,4 +79,5 @@ matrix_surface_grammar
 matrix_minimal_example
 apply_splice_implementation_stream_matrix
 apply_patch_line_number_assist_implementation_stream_matrix
+pueue_integration_execution_matrix
 ```

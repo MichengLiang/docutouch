@@ -3,7 +3,9 @@ mod support;
 
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
+use serde_json::Value;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 use support::{TEST_CHILD_TIMEOUT, json_object, timeout_result};
@@ -59,6 +61,189 @@ fn splice_failure_text() -> &'static str {
 
 fn splice_partial_failure_text() -> &'static str {
     "*** Begin Splice\n*** Copy From File: source-a.txt\n@@\n1 | alpha\n*** Append To File: dest-a.txt\n*** Copy From File: source-b.txt\n@@\n1 | beta\n*** Insert Before In File: missing.txt\n@@\n1 | beta\n*** End Splice\n"
+}
+
+struct PueueStubFixture {
+    bin_path: PathBuf,
+    runtime_dir: PathBuf,
+    plan_path: PathBuf,
+    counter_path: PathBuf,
+}
+
+impl PueueStubFixture {
+    fn new(base_dir: &Path, snapshots: &[Value], logs: &[(u64, &str)]) -> anyhow::Result<Self> {
+        let runtime_dir = base_dir.join("pueue-runtime");
+        let tool_dir = base_dir.join("pueue-stub");
+        let task_logs_dir = runtime_dir.join("task_logs");
+        std::fs::create_dir_all(&task_logs_dir)?;
+        std::fs::create_dir_all(&tool_dir)?;
+
+        for (task_id, contents) in logs {
+            std::fs::write(task_logs_dir.join(format!("{task_id}.log")), contents)?;
+        }
+
+        let plan_path = tool_dir.join("plan.json");
+        let counter_path = tool_dir.join("counter.txt");
+        std::fs::write(&plan_path, json!({ "snapshots": snapshots }).to_string())?;
+        std::fs::write(&counter_path, "0")?;
+
+        let script_path = tool_dir.join("pueue_stub.py");
+        std::fs::write(
+            &script_path,
+            r#"import json
+import os
+import pathlib
+import sys
+
+
+def main() -> int:
+    if sys.argv[1:] != ["status", "--json"]:
+        print(f"unsupported pueue stub args: {sys.argv[1:]}", file=sys.stderr)
+        return 1
+
+    plan_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_PLAN"])
+    counter_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_COUNTER"])
+    snapshots = json.loads(plan_path.read_text(encoding="utf-8"))["snapshots"]
+
+    counter = 0
+    if counter_path.exists():
+        raw_counter = counter_path.read_text(encoding="utf-8").strip()
+        if raw_counter:
+            counter = int(raw_counter)
+
+    snapshot_index = min(counter, len(snapshots) - 1)
+    counter_path.write_text(str(counter + 1), encoding="utf-8")
+    sys.stdout.write(json.dumps(snapshots[snapshot_index]))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"#,
+        )?;
+
+        let bin_path = if cfg!(windows) {
+            let powershell_path = tool_dir.join("pueue_stub.ps1");
+            std::fs::write(
+                &powershell_path,
+                r#"$ErrorActionPreference = 'Stop'
+if ($args.Count -ne 2 -or $args[0] -ne 'status' -or $args[1] -ne '--json') {
+    [Console]::Error.WriteLine("unsupported pueue stub args: $args")
+    exit 1
+}
+
+$planPath = $env:DOCUTOUCH_TEST_PUEUE_PLAN
+$counterPath = $env:DOCUTOUCH_TEST_PUEUE_COUNTER
+$snapshots = (Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json).snapshots
+
+$counter = 0
+if (Test-Path -LiteralPath $counterPath) {
+    $rawCounter = (Get-Content -LiteralPath $counterPath -Raw).Trim()
+    if ($rawCounter) {
+        $counter = [int]$rawCounter
+    }
+}
+
+$snapshotIndex = [Math]::Min($counter, $snapshots.Count - 1)
+Set-Content -LiteralPath $counterPath -Value ($counter + 1) -NoNewline
+[Console]::Out.Write(($snapshots[$snapshotIndex] | ConvertTo-Json -Compress -Depth 32))
+"#,
+            )?;
+            let bin_path = tool_dir.join("pueue.cmd");
+            std::fs::write(
+                &bin_path,
+                "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"%~dp0pueue_stub.ps1\" %*\r\n",
+            )?;
+            bin_path
+        } else {
+            let bin_path = tool_dir.join("pueue");
+            std::fs::write(
+                &bin_path,
+                "#!/usr/bin/env sh\nuv run python \"$(dirname \"$0\")/pueue_stub.py\" \"$@\"\n",
+            )?;
+            set_executable(&bin_path)?;
+            bin_path
+        };
+
+        Ok(Self {
+            bin_path,
+            runtime_dir,
+            plan_path,
+            counter_path,
+        })
+    }
+
+    fn configure_tokio_command(&self, command: &mut tokio::process::Command) {
+        command.env("DOCUTOUCH_PUEUE_BIN", &self.bin_path);
+        command.env("DOCUTOUCH_PUEUE_RUNTIME_DIR", &self.runtime_dir);
+        command.env("DOCUTOUCH_TEST_PUEUE_PLAN", &self.plan_path);
+        command.env("DOCUTOUCH_TEST_PUEUE_COUNTER", &self.counter_path);
+    }
+
+    fn configure_std_command(&self, command: &mut Command) {
+        command.env("DOCUTOUCH_PUEUE_BIN", &self.bin_path);
+        command.env("DOCUTOUCH_PUEUE_RUNTIME_DIR", &self.runtime_dir);
+        command.env("DOCUTOUCH_TEST_PUEUE_PLAN", &self.plan_path);
+        command.env("DOCUTOUCH_TEST_PUEUE_COUNTER", &self.counter_path);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_executable(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn set_executable(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn running_task(task_id: u64) -> Value {
+    json!({
+        "id": task_id,
+        "status": {
+            "Running": {
+                "start": "now"
+            }
+        }
+    })
+}
+
+fn done_task(task_id: u64, status: &str, exit_code: i64) -> Value {
+    json!({
+        "id": task_id,
+        "status": {
+            "Done": {
+                "result": status,
+                "exit_code": exit_code
+            }
+        }
+    })
+}
+
+fn status_snapshot(tasks: Vec<Value>) -> Value {
+    let mut map = serde_json::Map::new();
+    for task in tasks {
+        let task_id = task
+            .get("id")
+            .and_then(Value::as_u64)
+            .expect("task id for stub snapshot");
+        map.insert(task_id.to_string(), task);
+    }
+    Value::Object(
+        [("tasks".to_string(), Value::Object(map))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn normalize_simple_tool_error(text: &str) -> &str {
+    text.strip_prefix("Mcp error: -32602: ").unwrap_or(text)
 }
 
 async fn call_server_tool(
@@ -122,8 +307,120 @@ async fn call_server_tool_error(
     })
 }
 
+async fn call_server_tool_with_config(
+    cwd: &Path,
+    name: &str,
+    arguments: serde_json::Value,
+    configure: impl FnOnce(&mut tokio::process::Command),
+) -> anyhow::Result<String> {
+    with_server_client!(
+        cwd,
+        |cmd| {
+            configure(cmd);
+        },
+        client,
+        {
+            timeout_result(
+                format!(
+                    "set_workspace before server tool `{name}` in cli_smoke with command config"
+                ),
+                client.call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "set_workspace".into(),
+                    arguments: Some(json_object(json!({ "path": cwd }))),
+                    task: None,
+                }),
+            )
+            .await?;
+            let result = timeout_result(
+                format!("server tool `{name}` in cli_smoke with command config"),
+                client.call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: name.to_string().into(),
+                    arguments: Some(json_object(arguments)),
+                    task: None,
+                }),
+            )
+            .await?;
+            Ok(result.content[0].as_text().unwrap().text.clone())
+        }
+    )
+}
+
+async fn call_server_tool_error_with_config(
+    cwd: &Path,
+    name: &str,
+    arguments: serde_json::Value,
+    configure: impl FnOnce(&mut tokio::process::Command),
+) -> anyhow::Result<String> {
+    with_server_client!(
+        cwd,
+        |cmd| {
+            configure(cmd);
+        },
+        client,
+        {
+            timeout_result(
+                format!(
+                    "set_workspace before failing server tool `{name}` in cli_smoke with command config"
+                ),
+                client.call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "set_workspace".into(),
+                    arguments: Some(json_object(json!({ "path": cwd }))),
+                    task: None,
+                }),
+            )
+            .await?;
+            let err = timeout_result(
+                format!("failing server tool `{name}` in cli_smoke with command config"),
+                client.call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: name.to_string().into(),
+                    arguments: Some(json_object(arguments)),
+                    task: None,
+                }),
+            )
+            .await
+            .expect_err("tool call should fail");
+            Ok(err.to_string())
+        }
+    )
+}
+
 fn run_cli(cwd: &std::path::Path, args: &[&str], stdin: Option<&str>) -> anyhow::Result<Output> {
     support::run_cli(cwd, args, stdin)
+}
+
+fn run_cli_with_pueue_env(
+    cwd: &Path,
+    args: &[&str],
+    stdin: Option<&str>,
+    fixture: &PueueStubFixture,
+    extra_envs: &[(&str, &str)],
+) -> anyhow::Result<Output> {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_docutouch"));
+    command
+        .current_dir(cwd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    fixture.configure_std_command(&mut command);
+    for (key, value) in extra_envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn()?;
+    if let Some(input) = stdin {
+        use std::io::Write as _;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin pipe")
+            .write_all(input.as_bytes())?;
+    }
+    child.stdin.take();
+    support::wait_with_output_timeout(child, "docutouch CLI child with pueue env in cli_smoke")
 }
 
 #[tokio::test]
@@ -357,6 +654,286 @@ async fn cli_search_full_matches_mcp_output() -> anyhow::Result<()> {
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_wait_pueue_any_returns_terminal_task_summary() -> anyhow::Result<()> {
+    let cli_temp = tempfile::tempdir()?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[
+            status_snapshot(vec![running_task(501)]),
+            status_snapshot(vec![done_task(501, "Success", 0)]),
+        ],
+        &[(501, "alpha\n")],
+    )?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["wait-pueue", "501", "--timeout-seconds", "5"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    let text = utf8(&cli_output.stdout);
+    assert!(text.contains("reason: task_finished"));
+    assert!(text.contains("mode: any"));
+    assert!(text.contains("resolved_task_ids: 501"));
+    assert!(text.contains("triggered_task_ids: 501"));
+    assert!(text.contains("status: Success"));
+    assert!(text.contains("log_handle: pueue-log:501"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_wait_pueue_all_preserves_resolved_order() -> anyhow::Result<()> {
+    let cli_temp = tempfile::tempdir()?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[
+            status_snapshot(vec![running_task(601), running_task(602)]),
+            status_snapshot(vec![done_task(601, "Success", 0), running_task(602)]),
+            status_snapshot(vec![
+                done_task(601, "Success", 0),
+                done_task(602, "Success", 0),
+            ]),
+        ],
+        &[(601, "one\n"), (602, "two\n")],
+    )?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &[
+            "wait-pueue",
+            "602",
+            "601",
+            "602",
+            "--mode",
+            "all",
+            "--timeout-seconds",
+            "5",
+        ],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    let text = utf8(&cli_output.stdout);
+    assert!(text.contains("reason: all_finished"));
+    assert!(text.contains("mode: all"));
+    assert!(text.contains("resolved_task_ids: 602, 601"));
+    assert!(text.contains("triggered_task_ids: 602, 601"));
+    assert!(text.contains("[1] task 602"));
+    assert!(text.contains("[2] task 601"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_wait_pueue_uses_default_timeout_when_omitted() -> anyhow::Result<()> {
+    let cli_temp = tempfile::tempdir()?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[
+            status_snapshot(vec![done_task(702, "Success", 0), running_task(701)]),
+            status_snapshot(vec![done_task(702, "Success", 0), running_task(701)]),
+            status_snapshot(vec![done_task(702, "Success", 0), running_task(701)]),
+        ],
+        &[(701, "pending\n"), (702, "done\n")],
+    )?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["wait-pueue", "701", "702", "--mode", "all"],
+        None,
+        &cli_fixture,
+        &[("DOCUTOUCH_PUEUE_TIMEOUT_SECONDS", "0.1")],
+    )?;
+    assert!(cli_output.status.success());
+    let text = utf8(&cli_output.stdout);
+    assert!(text.contains("reason: timeout"));
+    assert!(text.contains("mode: all"));
+    assert!(text.contains("resolved_task_ids: 701, 702"));
+    assert!(text.contains("triggered_task_ids: 702"));
+    assert!(text.contains("pending_task_ids: 701"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_read_pueue_log_handle_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    let server_fixture = PueueStubFixture::new(
+        server_temp.path(),
+        &[status_snapshot(vec![done_task(801, "Success", 0)])],
+        &[(801, "alpha\nbeta\n")],
+    )?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[status_snapshot(vec![done_task(801, "Success", 0)])],
+        &[(801, "alpha\nbeta\n")],
+    )?;
+
+    let server_output = call_server_tool_with_config(
+        server_temp.path(),
+        "read_file",
+        json!({
+            "relative_path": "pueue-log:801"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["read", "pueue-log:801"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert_eq!(utf8(&cli_output.stdout), "alpha\nbeta\n");
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_search_pueue_log_handle_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    std::fs::write(server_temp.path().join("notes.txt"), "alpha\n")?;
+    std::fs::write(cli_temp.path().join("notes.txt"), "alpha\n")?;
+    let server_fixture = PueueStubFixture::new(
+        server_temp.path(),
+        &[status_snapshot(vec![done_task(802, "Success", 0)])],
+        &[(802, "alpha\n")],
+    )?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[status_snapshot(vec![done_task(802, "Success", 0)])],
+        &[(802, "alpha\n")],
+    )?;
+
+    let server_output = call_server_tool_with_config(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "alpha",
+            "path": ["pueue-log:802", "notes.txt"],
+            "view": "full"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &[
+            "search",
+            "alpha",
+            "pueue-log:802",
+            "notes.txt",
+            "--view",
+            "full",
+        ],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stdout).contains("scope: [pueue-log:802, notes.txt]"));
+    assert!(utf8(&cli_output.stdout).contains("pueue-log:802 (1 line, 1 match)"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_missing_pueue_task_error_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    let server_fixture =
+        PueueStubFixture::new(server_temp.path(), &[status_snapshot(vec![])], &[])?;
+    let cli_fixture = PueueStubFixture::new(cli_temp.path(), &[status_snapshot(vec![])], &[])?;
+
+    let server_error = call_server_tool_error_with_config(
+        server_temp.path(),
+        "read_file",
+        json!({
+            "relative_path": "pueue-log:999"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["read", "pueue-log:999"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(!cli_output.status.success());
+    assert!(utf8(&cli_output.stdout).is_empty());
+    assert_eq!(
+        utf8(&cli_output.stderr),
+        normalize_simple_tool_error(&server_error)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_missing_pueue_log_error_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    let server_fixture = PueueStubFixture::new(
+        server_temp.path(),
+        &[status_snapshot(vec![running_task(803)])],
+        &[],
+    )?;
+    let cli_fixture = PueueStubFixture::new(
+        cli_temp.path(),
+        &[status_snapshot(vec![running_task(803)])],
+        &[],
+    )?;
+
+    let server_error = call_server_tool_error_with_config(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "alpha",
+            "path": "pueue-log:803"
+        }),
+        |cmd| {
+            server_fixture.configure_tokio_command(cmd);
+        },
+    )
+    .await?;
+
+    let cli_output = run_cli_with_pueue_env(
+        cli_temp.path(),
+        &["search", "alpha", "pueue-log:803"],
+        None,
+        &cli_fixture,
+        &[],
+    )?;
+    assert!(!cli_output.status.success());
+    assert!(utf8(&cli_output.stdout).is_empty());
+    assert_eq!(
+        utf8(&cli_output.stderr),
+        normalize_simple_tool_error(&server_error)
+    );
     Ok(())
 }
 

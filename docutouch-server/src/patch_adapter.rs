@@ -141,8 +141,8 @@ fn with_patch_mode_override<T>(
 #[cfg(test)]
 mod tests {
     use super::{
-        APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, PatchInvocationAdapter,
-        PatchNumberedEvidenceMode, PatchSourceProvenance, with_patch_mode_override,
+        APPLY_PATCH_NUMBERED_EVIDENCE_MODE_ENV, PatchInvocationAdapter, PatchNumberedEvidenceMode,
+        PatchSourceProvenance, with_patch_mode_override,
     };
     use std::ffi::OsString;
 
@@ -208,8 +208,14 @@ mod tests {
         );
         let error = adapter.execute(patch).expect_err("patch should fail");
 
-        assert!(error.contains(".docutouch/failed-patches/retry.patch:3:1"), "{error}");
-        assert!(error.contains("= patch: .docutouch/failed-patches/retry.patch"), "{error}");
+        assert!(
+            error.contains(".docutouch/failed-patches/retry.patch:3:1"),
+            "{error}"
+        );
+        assert!(
+            error.contains("= patch: .docutouch/failed-patches/retry.patch"),
+            "{error}"
+        );
         assert!(error.contains("TARGET_WRITE_ERROR"), "{error}");
     }
 

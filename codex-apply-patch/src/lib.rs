@@ -1336,14 +1336,13 @@ fn prepare_chunk_lines(
     let mut lcs = vec![vec![0usize; new_len + 1]; old_len + 1];
     for old_index in (0..old_len).rev() {
         for new_index in (0..new_len).rev() {
-            lcs[old_index][new_index] = if chunk_lines_are_context_equivalent(
-                &old_lines[old_index],
-                &new_lines[new_index],
-            ) {
-                lcs[old_index + 1][new_index + 1] + 1
-            } else {
-                lcs[old_index + 1][new_index].max(lcs[old_index][new_index + 1])
-            };
+            lcs[old_index][new_index] =
+                if chunk_lines_are_context_equivalent(&old_lines[old_index], &new_lines[new_index])
+                {
+                    lcs[old_index + 1][new_index + 1] + 1
+                } else {
+                    lcs[old_index + 1][new_index].max(lcs[old_index][new_index + 1])
+                };
         }
     }
 
@@ -1378,7 +1377,10 @@ fn prepare_chunk_lines(
 }
 
 fn lines_match_authored_evidence(actual: &str, expected: &str) -> bool {
-    if actual == expected || actual.trim_end() == expected.trim_end() || actual.trim() == expected.trim() {
+    if actual == expected
+        || actual.trim_end() == expected.trim_end()
+        || actual.trim() == expected.trim()
+    {
         return true;
     }
 
@@ -1836,7 +1838,8 @@ fn derive_new_contents_from_chunks(
         }
     };
 
-    let new_contents = apply_update_file_to_content_with_mode(&original_contents, path, chunks, mode)?;
+    let new_contents =
+        apply_update_file_to_content_with_mode(&original_contents, path, chunks, mode)?;
     Ok(AppliedPatch {
         original_contents,
         new_contents,
@@ -1857,7 +1860,10 @@ fn compute_replacements(
 
     for (chunk_index, chunk) in chunks.iter().enumerate() {
         let prepared = prepare_chunk_lines(chunk, mode).map_err(|message| ReplaceMatchError {
-            message: format!("Failed to prepare numbered old-side evidence in {}: {message}", path.display()),
+            message: format!(
+                "Failed to prepare numbered old-side evidence in {}: {message}",
+                path.display()
+            ),
             chunk_index,
             is_end_of_file: false,
             target_anchor: None,
@@ -1868,7 +1874,12 @@ fn compute_replacements(
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
             if let Some(numbered_context) = parse_numbered_old_side_evidence(ctx_line) {
-                match match_numbered_context_anchor(original_lines, path, &numbered_context, line_index) {
+                match match_numbered_context_anchor(
+                    original_lines,
+                    path,
+                    &numbered_context,
+                    line_index,
+                ) {
                     Ok((idx, anchor)) => {
                         line_index = idx + 1;
                         matched_context_anchor = Some(anchor);
@@ -1933,37 +1944,60 @@ fn compute_replacements(
         let mut pattern: &[ParsedChunkLine] = &prepared.old_lines;
         let mut new_slice: &[String] = &prepared.new_lines;
 
-        let mut pattern_text = pattern.iter().map(|line| line.visible.clone()).collect::<Vec<_>>();
+        let mut pattern_text = pattern
+            .iter()
+            .map(|line| line.visible.clone())
+            .collect::<Vec<_>>();
         let mut found = if pattern.iter().any(|line| line.numbered.is_some()) {
-            Some(find_numbered_old_side_match(original_lines, path, pattern, line_index))
+            Some(find_numbered_old_side_match(
+                original_lines,
+                path,
+                pattern,
+                line_index,
+            ))
         } else {
             Some(
-                seek_sequence::seek_sequence(original_lines, &pattern_text, line_index, chunk.is_end_of_file)
-                    .ok_or_else(|| ReplaceMatchError {
-                        message: format!(
-                            "Failed to find expected lines in {}:\n{}",
-                            path.display(),
-                            pattern_text.join("\n")
-                        ),
-                        chunk_index,
-                        is_end_of_file: chunk.is_end_of_file,
-                        target_anchor: matched_context_anchor.clone(),
-                        blame_first_old_line: true,
-                    }),
+                seek_sequence::seek_sequence(
+                    original_lines,
+                    &pattern_text,
+                    line_index,
+                    chunk.is_end_of_file,
+                )
+                .ok_or_else(|| ReplaceMatchError {
+                    message: format!(
+                        "Failed to find expected lines in {}:\n{}",
+                        path.display(),
+                        pattern_text.join("\n")
+                    ),
+                    chunk_index,
+                    is_end_of_file: chunk.is_end_of_file,
+                    target_anchor: matched_context_anchor.clone(),
+                    blame_first_old_line: true,
+                }),
             )
         };
 
-        if found.as_ref().is_some_and(|result| result.is_err()) && pattern.last().is_some_and(|line| line.visible.is_empty()) {
+        if found.as_ref().is_some_and(|result| result.is_err())
+            && pattern.last().is_some_and(|line| line.visible.is_empty())
+        {
             // Retry without the trailing empty line which represents the final
             // newline in the file.
             pattern = &pattern[..pattern.len() - 1];
-            pattern_text = pattern.iter().map(|line| line.visible.clone()).collect::<Vec<_>>();
+            pattern_text = pattern
+                .iter()
+                .map(|line| line.visible.clone())
+                .collect::<Vec<_>>();
             if new_slice.last().is_some_and(String::is_empty) {
                 new_slice = &new_slice[..new_slice.len() - 1];
             }
 
             found = if pattern.iter().any(|line| line.numbered.is_some()) {
-                Some(find_numbered_old_side_match(original_lines, path, pattern, line_index))
+                Some(find_numbered_old_side_match(
+                    original_lines,
+                    path,
+                    pattern,
+                    line_index,
+                ))
             } else {
                 Some(
                     seek_sequence::seek_sequence(
@@ -2876,8 +2910,14 @@ g
         let path = Path::new("app.py");
         let chunks = vec![UpdateFileChunk {
             change_context: None,
-            old_lines: vec!["4 | def handler():".to_string(), "5 |     value = 1".to_string()],
-            new_lines: vec!["4 | def handler():".to_string(), "    value = 2".to_string()],
+            old_lines: vec![
+                "4 | def handler():".to_string(),
+                "5 |     value = 1".to_string(),
+            ],
+            new_lines: vec![
+                "4 | def handler():".to_string(),
+                "    value = 2".to_string(),
+            ],
             is_end_of_file: false,
         }];
 
@@ -2937,8 +2977,7 @@ g
         let path = dir.path().join("app.txt");
         fs::write(&path, "alpha\nbeta\nalpha\n").unwrap();
 
-        let patch =
-            wrap_patch("*** Update File: app.txt\n@@ 2 | alpha\n-beta\n+gamma");
+        let patch = wrap_patch("*** Update File: app.txt\n@@ 2 | alpha\n-beta\n+gamma");
         let report = apply_patch_in_dir(&patch, dir.path()).unwrap();
 
         assert_eq!(report.status, ApplyPatchStatus::Failure);
@@ -2959,11 +2998,9 @@ g
         let path = dir.path().join("lines.txt");
         fs::write(&path, "a\nb\nc\n").unwrap();
 
-        let patch = wrap_patch(
-            "*** Update File: lines.txt\n@@\n-1 | a\n@@\n-2 | b\n+beta",
-        );
-        let report = apply_patch_in_dir_with_mode(&patch, dir.path(), NumberedEvidenceMode::Full)
-            .unwrap();
+        let patch = wrap_patch("*** Update File: lines.txt\n@@\n-1 | a\n@@\n-2 | b\n+beta");
+        let report =
+            apply_patch_in_dir_with_mode(&patch, dir.path(), NumberedEvidenceMode::Full).unwrap();
 
         assert_eq!(report.status, ApplyPatchStatus::FullSuccess);
         assert_eq!(fs::read_to_string(&path).unwrap(), "beta\nc\n");

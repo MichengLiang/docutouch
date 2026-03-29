@@ -325,7 +325,8 @@ fn test_apply_patch_cli_supports_dense_numbered_old_side_evidence() -> anyhow::R
 }
 
 #[test]
-fn test_apply_patch_cli_header_only_mode_treats_dense_numbered_text_literal() -> anyhow::Result<()> {
+fn test_apply_patch_cli_header_only_mode_treats_dense_numbered_text_literal() -> anyhow::Result<()>
+{
     let tmp = tempdir()?;
     let target_path = tmp.path().join("rendered.txt");
     fs::write(&target_path, "121 | value = 1\n")?;

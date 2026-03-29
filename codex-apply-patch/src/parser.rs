@@ -151,10 +151,7 @@ fn classify_numbered_header_evidence(payload: &str) -> Result<NumberedHeaderEvid
         return Ok(NumberedHeaderEvidence::None);
     }
 
-    let digit_count = payload
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .count();
+    let digit_count = payload.chars().take_while(|ch| ch.is_ascii_digit()).count();
     let digits = &payload[..digit_count];
     let rest = &payload[digit_count..];
 

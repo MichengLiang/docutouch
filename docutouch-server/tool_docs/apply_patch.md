@@ -54,6 +54,7 @@ HunkLine := (" " | "-" | "+") text NEWLINE
 * If default context does not uniquely identify the target location, you may add one numbered anchor header such as `@@ 120 | def handler():`.
 * Numbered line assist is optional. When ordinary context is already unique enough, you do not need to add it.
 * The default public guidance teaches one numbered anchor header, not raw textual `@@ class Example` / `@@ def handler():` headers.
+* As a narrow compatibility path, if a numbered header is immediately followed by a first old-side line with the same visible text, runtime may treat that repeated first old-side line as beginning at the header-locked line itself.
 * If one numbered anchor is still insufficient, strengthen the patch with fresher or more local surrounding context rather than stacking multiple `@@` headers.
 * When adjacent changes fall within the same local region, do not duplicate overlapping context unless additional context is required for unique anchoring.
 

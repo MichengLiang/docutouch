@@ -27,6 +27,7 @@
 ## Authority Basis
 
 - 当前 `@@` runtime 语义只是单行 coarse pre-anchor，不足以单独承担强定位；
+- runtime 可额外保留极窄的 compatibility refinement，例如仅在 numbered header 后紧接重复首行 old-side evidence 时接住该 authored shape；这不等于把 canonical public form 改写为重复首行语义；
 - raw textual anchor 只能缩窄搜索窗口，不能给出全局唯一的 old-side 锁定；
 - absolute 1-indexed line number 与 visible text 组合后，才形成真正有判别力的辅助定位证据；
 - 大多数 patch 不需要把整段 old-side 全部编号，一个 single numbered anchor 已足够覆盖主路径；
@@ -71,6 +72,7 @@
 - candidate spec 应明确区分 parser support set 与 prompt-preferred subset；
 - tool docs 应把 `@@ N | visible text` 写成 canonical teaching form；
 - default runtime mode 应保持 `header_only`，而不是默认把 dense numbered old-side evidence 全面上浮；
+- 若为高频 LLM-authored shape 增加窄 compatibility path，文档仍应区分“truthful runtime reality”与“canonical public guidance”；
 - CLI 可提供单次 invocation override，environment 可提供 process-level default；
 - MCP 不新增专门的 numbered-evidence 参数，而是只受 server process environment 影响；
 - implementation 应把 line-number assist 设计为 old-side evidence strengthening，而不是新工具身份；

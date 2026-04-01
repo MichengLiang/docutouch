@@ -2030,6 +2030,39 @@ async fn server_env_full_enables_dense_numbered_old_side_evidence() -> anyhow::R
 }
 
 #[tokio::test]
+async fn server_accepts_duplicate_first_old_side_after_numbered_header() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(
+        temp.path().join("app.py"),
+        "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+    )?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+
+        let patch_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_patch".into(),
+                arguments: Some(json_object(json!({
+                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@ 4 | def handler():\n-def handler():\n-    value = 1\n+def handler():\n+    value = 2\n*** End Patch\n"
+                }))),
+                task: None,
+            })
+            .await?;
+
+        let message = &patch_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("app.py"))?,
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+        );
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_reports_first_removed_line_when_context_precedes_mismatch() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::write(temp.path().join("app.py"), "context\nother\nvalue = 1\n")?;

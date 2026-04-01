@@ -1613,6 +1613,65 @@ fn find_numbered_old_side_match(
     Ok(start_index)
 }
 
+fn pattern_matches_at_index(
+    original_lines: &[String],
+    pattern: &[ParsedChunkLine],
+    start_index: usize,
+) -> bool {
+    if start_index + pattern.len() > original_lines.len() {
+        return false;
+    }
+
+    pattern.iter().enumerate().all(|(offset, line)| {
+        lines_match_authored_evidence(&original_lines[start_index + offset], &line.visible)
+    })
+}
+
+fn exact_old_side_match_at_index<'a>(
+    original_lines: &[String],
+    pattern: &'a [ParsedChunkLine],
+    new_slice: &'a [String],
+    start_index: usize,
+) -> Option<(&'a [ParsedChunkLine], &'a [String], usize)> {
+    if pattern_matches_at_index(original_lines, pattern, start_index) {
+        return Some((pattern, new_slice, start_index));
+    }
+
+    if pattern.last().is_some_and(|line| line.visible.is_empty()) {
+        let trimmed_pattern = &pattern[..pattern.len() - 1];
+        let trimmed_new_slice = if new_slice.last().is_some_and(String::is_empty) {
+            &new_slice[..new_slice.len() - 1]
+        } else {
+            new_slice
+        };
+        if pattern_matches_at_index(original_lines, trimmed_pattern, start_index) {
+            return Some((trimmed_pattern, trimmed_new_slice, start_index));
+        }
+    }
+
+    None
+}
+
+fn expected_lines_match_error(
+    path: &Path,
+    pattern_text: &[String],
+    chunk_index: usize,
+    is_end_of_file: bool,
+    matched_context_anchor: Option<ApplyPatchTargetAnchor>,
+) -> ReplaceMatchError {
+    ReplaceMatchError {
+        message: format!(
+            "Failed to find expected lines in {}:\n{}",
+            path.display(),
+            pattern_text.join("\n")
+        ),
+        chunk_index,
+        is_end_of_file,
+        target_anchor: matched_context_anchor,
+        blame_first_old_line: true,
+    }
+}
+
 pub fn apply_update_file_to_content(
     original_contents: &str,
     path: &Path,
@@ -1870,6 +1929,8 @@ fn compute_replacements(
             blame_first_old_line: false,
         })?;
         let mut matched_context_anchor = None;
+        let mut matched_numbered_context = None;
+        let mut matched_context_index = None;
         // If a chunk has a `change_context`, we use seek_sequence to find it, then
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
@@ -1881,6 +1942,8 @@ fn compute_replacements(
                     line_index,
                 ) {
                     Ok((idx, anchor)) => {
+                        matched_numbered_context = Some(numbered_context);
+                        matched_context_index = Some(idx);
                         line_index = idx + 1;
                         matched_context_anchor = Some(anchor);
                     }
@@ -1948,7 +2011,36 @@ fn compute_replacements(
             .iter()
             .map(|line| line.visible.clone())
             .collect::<Vec<_>>();
-        let mut found = if pattern.iter().any(|line| line.numbered.is_some()) {
+        let duplicate_first_old_side_start = matched_numbered_context
+            .as_ref()
+            .zip(matched_context_index)
+            .and_then(|(numbered_context, context_index)| {
+                pattern.first().and_then(|first_line| {
+                    lines_match_authored_evidence(&numbered_context.text, &first_line.visible)
+                        .then_some(context_index)
+                })
+            });
+        let mut found = if let Some(start_index) = duplicate_first_old_side_start {
+            Some(
+                exact_old_side_match_at_index(original_lines, pattern, new_slice, start_index)
+                    .map(
+                        |(matched_pattern, matched_new_slice, matched_start_index)| {
+                            pattern = matched_pattern;
+                            new_slice = matched_new_slice;
+                            matched_start_index
+                        },
+                    )
+                    .ok_or_else(|| {
+                        expected_lines_match_error(
+                            path,
+                            &pattern_text,
+                            chunk_index,
+                            chunk.is_end_of_file,
+                            matched_context_anchor.clone(),
+                        )
+                    }),
+            )
+        } else if pattern.iter().any(|line| line.numbered.is_some()) {
             Some(find_numbered_old_side_match(
                 original_lines,
                 path,
@@ -1963,21 +2055,20 @@ fn compute_replacements(
                     line_index,
                     chunk.is_end_of_file,
                 )
-                .ok_or_else(|| ReplaceMatchError {
-                    message: format!(
-                        "Failed to find expected lines in {}:\n{}",
-                        path.display(),
-                        pattern_text.join("\n")
-                    ),
-                    chunk_index,
-                    is_end_of_file: chunk.is_end_of_file,
-                    target_anchor: matched_context_anchor.clone(),
-                    blame_first_old_line: true,
+                .ok_or_else(|| {
+                    expected_lines_match_error(
+                        path,
+                        &pattern_text,
+                        chunk_index,
+                        chunk.is_end_of_file,
+                        matched_context_anchor.clone(),
+                    )
                 }),
             )
         };
 
-        if found.as_ref().is_some_and(|result| result.is_err())
+        if duplicate_first_old_side_start.is_none()
+            && found.as_ref().is_some_and(|result| result.is_err())
             && pattern.last().is_some_and(|line| line.visible.is_empty())
         {
             // Retry without the trailing empty line which represents the final
@@ -2006,16 +2097,14 @@ fn compute_replacements(
                         line_index,
                         chunk.is_end_of_file,
                     )
-                    .ok_or_else(|| ReplaceMatchError {
-                        message: format!(
-                            "Failed to find expected lines in {}:\n{}",
-                            path.display(),
-                            pattern_text.join("\n")
-                        ),
-                        chunk_index,
-                        is_end_of_file: chunk.is_end_of_file,
-                        target_anchor: matched_context_anchor.clone(),
-                        blame_first_old_line: true,
+                    .ok_or_else(|| {
+                        expected_lines_match_error(
+                            path,
+                            &pattern_text,
+                            chunk_index,
+                            chunk.is_end_of_file,
+                            matched_context_anchor.clone(),
+                        )
                     }),
                 )
             };
@@ -2906,10 +2995,105 @@ g
     }
 
     #[test]
+    fn test_apply_update_file_supports_duplicate_first_old_side_after_numbered_context_anchor() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: Some("4 | def handler():".to_string()),
+            old_lines: vec!["def handler():".to_string(), "    value = 1".to_string()],
+            new_lines: vec!["def handler():".to_string(), "    value = 2".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content(
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+            path,
+            &chunks,
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated,
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_patch_duplicate_first_old_side_does_not_fallback_to_later_match() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("app.txt");
+        fs::write(&path, "anchor\nwrong\nanchor\nexpected\n").unwrap();
+
+        let patch = wrap_patch(
+            "*** Update File: app.txt\n@@ 1 | anchor\n-anchor\n-expected\n+anchor\n+replacement",
+        );
+        let report = apply_patch_in_dir(&patch, dir.path()).unwrap();
+
+        assert_eq!(report.status, ApplyPatchStatus::Failure);
+        assert_eq!(report.failed_units[0].code, "MATCH_INVALID_CONTEXT");
+        let anchor = report.failed_units[0]
+            .target_anchor
+            .as_ref()
+            .expect("target anchor");
+        assert_eq!(anchor.path, path);
+        assert_eq!(anchor.line_number, 1);
+        assert_eq!(anchor.excerpt.as_deref(), Some("anchor"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "anchor\nwrong\nanchor\nexpected\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_update_file_duplicate_first_old_side_only_triggers_on_first_old_side_line() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: Some("1 | anchor".to_string()),
+            old_lines: vec!["beta".to_string(), "anchor".to_string()],
+            new_lines: vec!["beta".to_string(), "omega".to_string()],
+            is_end_of_file: false,
+        }];
+
+        let updated =
+            apply_update_file_to_content("anchor\nbeta\nanchor\n", path, &chunks).unwrap();
+
+        assert_eq!(updated, "anchor\nbeta\nomega\n");
+    }
+
+    #[test]
     fn test_apply_update_file_supports_dense_numbered_old_side_evidence() {
         let path = Path::new("app.py");
         let chunks = vec![UpdateFileChunk {
             change_context: None,
+            old_lines: vec![
+                "4 | def handler():".to_string(),
+                "5 |     value = 1".to_string(),
+            ],
+            new_lines: vec![
+                "4 | def handler():".to_string(),
+                "    value = 2".to_string(),
+            ],
+            is_end_of_file: false,
+        }];
+
+        let updated = apply_update_file_to_content_with_mode(
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 1\n",
+            path,
+            &chunks,
+            NumberedEvidenceMode::Full,
+        )
+        .unwrap();
+
+        assert_eq!(
+            updated,
+            "def handler():\n    value = 0\n\ndef handler():\n    value = 2\n"
+        );
+    }
+
+    #[test]
+    fn test_apply_update_file_supports_duplicate_first_old_side_with_numbered_body_in_full_mode() {
+        let path = Path::new("app.py");
+        let chunks = vec![UpdateFileChunk {
+            change_context: Some("4 | def handler():".to_string()),
             old_lines: vec![
                 "4 | def handler():".to_string(),
                 "5 |     value = 1".to_string(),

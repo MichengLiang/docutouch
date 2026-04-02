@@ -54,6 +54,9 @@
 * - `apply_patch_semantics.md`
   - Source-bearing article
   - 记录 `apply_patch` 当前已接纳的 interface semantics 与 warning contract
+* - `apply_rewrite_spec.md`
+  - Source-bearing article
+  - 记录 `apply_rewrite` 的稳定 contract surface、selection/with-block 语义与执行边界
 * - `apply_splice_spec.md`
   - Source-bearing article
   - 记录 `apply_splice` 的稳定 contract surface 与 action basis
@@ -75,6 +78,7 @@
 
 authoring_contract
 apply_patch_semantics
+apply_rewrite_spec
 apply_splice_spec
 read_file_sampled_view_spec
 search_text_ux_contract

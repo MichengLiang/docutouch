@@ -3,14 +3,15 @@ use crate::pueue::{
     PueueError, PueueRuntime, PueueTaskSnapshot, PueueWaitSnapshot, WaitMode, WaitReason,
     clean_task_log_surface, format_task_log_handle, parse_task_log_handle,
 };
+use crate::rewrite_adapter::RewriteInvocationAdapter;
 use crate::splice_adapter::SpliceInvocationAdapter;
 use anyhow::Result;
 use docutouch_core::{
     DirectoryListOptions, PatchWorkspaceRequirement, ReadFileLineRange, ReadFileOptions,
-    ReadFileSampledViewOptions, SearchTextView, SpliceWorkspaceRequirement, TimestampField,
-    list_directory, normalize_sampled_view_options, parse_read_file_line_range_text,
-    patch_workspace_requirement, read_file_with_sampled_view, search_text,
-    splice_workspace_requirement,
+    ReadFileSampledViewOptions, RewriteWorkspaceRequirement, SearchTextView,
+    SpliceWorkspaceRequirement, TimestampField, list_directory, normalize_sampled_view_options,
+    parse_read_file_line_range_text, patch_workspace_requirement, read_file_with_sampled_view,
+    rewrite_workspace_requirement, search_text, splice_workspace_requirement,
 };
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
@@ -25,6 +26,7 @@ use tokio::process::Command as TokioCommand;
 use tokio::sync::RwLock;
 
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
+const APPLY_REWRITE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_rewrite.md");
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
 const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
@@ -118,6 +120,14 @@ pub struct ApplySpliceArgs {
         description = "freeform splice 文本。程序接受 Begin/End Splice envelope、Copy/Move/Delete Span action 以及 Append/Insert/Replace target clauses，并按当前 splice runtime 执行。"
     )]
     pub splice: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApplyRewriteArgs {
+    #[schemars(
+        description = "freeform rewrite 文本。程序接受 Begin/End Rewrite envelope、Add/Delete/Update file operation、selection-locked rewrite action 与 WithBlock，并按当前 rewrite runtime 执行。"
+    )]
+    pub rewrite: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -268,6 +278,10 @@ impl ToolService {
                 let args = parse_json_args::<ApplySpliceArgs>(arguments)?;
                 self.apply_splice_impl(args.splice).await
             }
+            "apply_rewrite" => {
+                let args = parse_json_args::<ApplyRewriteArgs>(arguments)?;
+                self.apply_rewrite_impl(args.rewrite).await
+            }
             other => Err(ServiceError::tool_not_found(format!(
                 "unknown tool: {other}"
             ))),
@@ -396,6 +410,14 @@ impl ToolService {
             .map_err(ServiceError::splice_apply_failed)
     }
 
+    async fn apply_rewrite_impl(&self, rewrite: String) -> Result<String, ServiceError> {
+        let _guard = self.execution_lock.write().await;
+        let adapter = self.resolve_rewrite_invocation(&rewrite).await?;
+        adapter
+            .execute(&rewrite)
+            .map_err(ServiceError::rewrite_apply_failed)
+    }
+
     async fn resolve_path(&self, raw_path: &str) -> Result<PathBuf, ServiceError> {
         let workspace = self.workspace.read().await;
         resolve_user_path(raw_path, workspace.as_deref())
@@ -444,6 +466,28 @@ impl ToolService {
             }
             SpliceWorkspaceRequirement::Unanchored => Ok(SpliceInvocationAdapter::unanchored(
                 crate::splice_adapter::SpliceSourceProvenance::Inline,
+            )),
+        }
+    }
+
+    async fn resolve_rewrite_invocation(
+        &self,
+        rewrite: &str,
+    ) -> Result<RewriteInvocationAdapter, ServiceError> {
+        if let Some(workspace) = self.workspace.read().await.clone() {
+            return Ok(RewriteInvocationAdapter::for_workspace(workspace));
+        }
+
+        match rewrite_workspace_requirement(rewrite) {
+            RewriteWorkspaceRequirement::NeedsWorkspace => Err(relative_workspace_error()),
+            RewriteWorkspaceRequirement::AbsoluteOnly { anchor_dir } => {
+                Ok(RewriteInvocationAdapter::for_execution_only(
+                    anchor_dir,
+                    crate::rewrite_adapter::RewriteSourceProvenance::Inline,
+                ))
+            }
+            RewriteWorkspaceRequirement::Unanchored => Ok(RewriteInvocationAdapter::unanchored(
+                crate::rewrite_adapter::RewriteSourceProvenance::Inline,
             )),
         }
     }
@@ -519,6 +563,13 @@ impl ServiceError {
         }
     }
 
+    pub fn rewrite_apply_failed(message: impl Into<String>) -> Self {
+        Self {
+            kind: ServiceErrorKind::InvalidArgument,
+            message: message.into(),
+        }
+    }
+
     pub fn tool_failure(message: impl Into<String>) -> Self {
         Self {
             kind: ServiceErrorKind::ToolFailure,
@@ -570,6 +621,10 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     tools.push(build_mcp_tool::<ApplySpliceArgs>(
         "apply_splice",
         APPLY_SPLICE_TOOL_DESCRIPTION,
+    )?);
+    tools.push(build_mcp_tool::<ApplyRewriteArgs>(
+        "apply_rewrite",
+        APPLY_REWRITE_TOOL_DESCRIPTION,
     )?);
     Ok(tools)
 }

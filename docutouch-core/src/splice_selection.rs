@@ -2,11 +2,13 @@ use std::fmt;
 
 const SOURCE_OMISSION_TOKEN: &str = "... source lines omitted ...";
 const TARGET_OMISSION_TOKEN: &str = "... target lines omitted ...";
+const REWRITE_OMISSION_TOKEN: &str = "... lines omitted ...";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectionSide {
     Source,
     Target,
+    Rewrite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +62,12 @@ pub struct ResolvedSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedSelectionOffsets {
+    pub start_offset: usize,
+    pub end_offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SelectionResolutionRange {
     pub start_line: usize,
     pub end_line: usize,
@@ -93,8 +101,19 @@ impl SelectionDiagnosticCode {
             SelectionDiagnosticCode::Invalid => match side {
                 SelectionSide::Source => "SPLICE_SOURCE_SELECTION_INVALID",
                 SelectionSide::Target => "SPLICE_TARGET_SELECTION_INVALID",
+                SelectionSide::Rewrite => "REWRITE_SELECTION_INVALID",
             },
-            SelectionDiagnosticCode::Truncated => "SPLICE_SELECTION_TRUNCATED",
+            SelectionDiagnosticCode::Truncated => match side {
+                SelectionSide::Source | SelectionSide::Target => "SPLICE_SELECTION_TRUNCATED",
+                SelectionSide::Rewrite => "REWRITE_SELECTION_TRUNCATED",
+            },
+        }
+    }
+
+    pub fn rewrite_code(self) -> &'static str {
+        match self {
+            SelectionDiagnosticCode::Invalid => "REWRITE_SELECTION_INVALID",
+            SelectionDiagnosticCode::Truncated => "REWRITE_SELECTION_TRUNCATED",
         }
     }
 }
@@ -190,14 +209,17 @@ pub(crate) fn parse_selection_block_with_locations(
     let mut items = Vec::with_capacity(body_lines.len());
     let mut authored_item_lines = Vec::with_capacity(body_lines.len());
     let expected_omission = omission_token(side);
-    let unexpected_omission = omission_token(opposite_side(side));
     for (item_index, raw_line) in body_lines.iter().enumerate() {
         authored_item_lines.push(body_start_line.map(|line| line + item_index));
         if *raw_line == expected_omission {
             items.push(SelectionItem::Omission);
             continue;
         }
-        if *raw_line == unexpected_omission {
+        if omission_tokens()
+            .iter()
+            .copied()
+            .any(|token| token != expected_omission && *raw_line == token)
+        {
             return Err(SelectionParseError::new(
                 SelectionDiagnosticCode::Truncated,
                 format!(
@@ -310,6 +332,51 @@ where
         end_line: last.line.line_number,
         first_item_index: first.item_index,
         last_item_index: last.item_index,
+    })
+}
+
+pub fn resolve_selection_offsets(
+    block: &SelectionBlock,
+    file_bytes: &[u8],
+    text_label: &str,
+) -> Result<ResolvedSelectionOffsets, SelectionResolveError> {
+    let lines = split_file_lines(file_bytes);
+    let range = validate_selection_resolution(block, text_label, |line| {
+        lines
+            .get(line.line_number.saturating_sub(1))
+            .map(|actual| actual.body == line.visible_content.as_bytes())
+    })?;
+
+    let start_offset = lines
+        .get(range.start_line - 1)
+        .ok_or_else(|| {
+            SelectionResolveError::new(
+                SelectionDiagnosticCode::Invalid,
+                format!(
+                    "selection line {} does not exist in the {text_label}",
+                    range.start_line
+                ),
+                Some(range.first_item_index),
+            )
+        })?
+        .start;
+    let end_offset = lines
+        .get(range.end_line - 1)
+        .ok_or_else(|| {
+            SelectionResolveError::new(
+                SelectionDiagnosticCode::Invalid,
+                format!(
+                    "selection line {} does not exist in the {text_label}",
+                    range.end_line
+                ),
+                Some(range.last_item_index),
+            )
+        })?
+        .end;
+
+    Ok(ResolvedSelectionOffsets {
+        start_offset,
+        end_offset,
     })
 }
 
@@ -474,18 +541,55 @@ fn omission_token(side: SelectionSide) -> &'static str {
     match side {
         SelectionSide::Source => SOURCE_OMISSION_TOKEN,
         SelectionSide::Target => TARGET_OMISSION_TOKEN,
+        SelectionSide::Rewrite => REWRITE_OMISSION_TOKEN,
     }
 }
 
-fn opposite_side(side: SelectionSide) -> SelectionSide {
-    match side {
-        SelectionSide::Source => SelectionSide::Target,
-        SelectionSide::Target => SelectionSide::Source,
-    }
+fn omission_tokens() -> [&'static str; 3] {
+    [
+        SOURCE_OMISSION_TOKEN,
+        TARGET_OMISSION_TOKEN,
+        REWRITE_OMISSION_TOKEN,
+    ]
 }
 
 fn contains_horizontal_truncation_marker(raw_line: &str) -> bool {
     raw_line.contains("...[") && raw_line.contains(" chars omitted]")
+}
+
+#[derive(Clone, Debug)]
+struct ByteLineSpan {
+    body: Vec<u8>,
+    start: usize,
+    end: usize,
+}
+
+fn split_file_lines(file_bytes: &[u8]) -> Vec<ByteLineSpan> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (index, byte) in file_bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            let body_end = if index > start && file_bytes[index - 1] == b'\r' {
+                index - 1
+            } else {
+                index
+            };
+            lines.push(ByteLineSpan {
+                body: file_bytes[start..body_end].to_vec(),
+                start,
+                end: index + 1,
+            });
+            start = index + 1;
+        }
+    }
+    if start < file_bytes.len() {
+        lines.push(ByteLineSpan {
+            body: file_bytes[start..].to_vec(),
+            start,
+            end: file_bytes.len(),
+        });
+    }
+    lines
 }
 
 fn selection_line_missing_message(line_number: usize, text_label: &str) -> String {

@@ -86,7 +86,7 @@
 
 - 若你要快速进入当前 DocuTouch 产品定位，先读 {ref}`knowledge-positioning-product-positioning`。
 - 若你要进入当前维护与测试纪律，先读 {ref}`knowledge-operations-maintenance-priorities`、{ref}`knowledge-operations-upstream-sync-and-compatibility` 与 {ref}`knowledge-operations-testing-and-tool-admission`。
-- 若你要进入当前工具 contract，先读 {ref}`knowledge-interfaces-apply-patch-semantics`、{ref}`knowledge-interfaces-read-file-sampled-view-spec`、{ref}`knowledge-interfaces-search-text-ux-contract` 与相关 interface pages。
+- 若你要进入当前工具 contract，先读 {ref}`knowledge-interfaces-apply-patch-semantics`、{ref}`knowledge-interfaces-apply-rewrite-spec`、{ref}`knowledge-interfaces-read-file-sampled-view-spec`、{ref}`knowledge-interfaces-search-text-ux-contract` 与相关 interface pages。
 - 若你要查看当前迁移裁决账本，进入 {ref}`records-migration-docs-markdown-ledger`。
 
 ## 阅读顺序

@@ -1,10 +1,14 @@
+use crate::line_boundary::{
+    ends_with_line_break, needs_boundary_prefix, needs_boundary_suffix,
+    normalize_payload_for_target_boundaries,
+};
 use crate::splice_program::{
     DeleteAction, SpliceAction, SpliceProgram, SpliceProgramParseError, TargetAction,
     TransferAction, TransferSourceKind, extract_splice_paths, parse_splice_program,
 };
 use crate::splice_selection::{
-    SelectionBlock, SelectionDiagnosticCode, SelectionItem, SelectionLine, SelectionResolveError,
-    SelectionSide, validate_selection_resolution,
+    ResolvedSelectionOffsets, SelectionBlock, SelectionItem, SelectionLine, SelectionResolveError,
+    SelectionSide, resolve_selection_offsets,
 };
 use codex_apply_patch::{
     AffectedPaths, ByteFileChange, MissingAfterBehavior, PathIdentityKey, ResolvedPath,
@@ -187,18 +191,7 @@ type RuntimePath = ResolvedPath;
 type PathState = RuntimePathState<Vec<u8>>;
 type PathStateMap = RuntimePathMap<Vec<u8>>;
 
-#[derive(Clone, Debug)]
-struct LineSpan {
-    body: Vec<u8>,
-    start: usize,
-    end: usize,
-}
-
-#[derive(Clone, Debug)]
-struct ResolvedByteSelection {
-    start_offset: usize,
-    end_offset: usize,
-}
+type ResolvedByteSelection = ResolvedSelectionOffsets;
 
 #[derive(Clone, Debug)]
 enum RuntimeTarget {
@@ -795,19 +788,12 @@ fn normalize_transfer_bytes_for_target_boundary(
         return transferred_bytes;
     }
 
-    let newline = preferred_target_newline(target_bytes);
-    let mut normalized = Vec::with_capacity(
-        transferred_bytes.len()
-            + newline.len() * (usize::from(needs_prefix) + usize::from(needs_suffix)),
-    );
-    if needs_prefix {
-        normalized.extend_from_slice(newline);
-    }
-    normalized.extend_from_slice(&transferred_bytes);
-    if needs_suffix {
-        normalized.extend_from_slice(newline);
-    }
-    normalized
+    normalize_payload_for_target_boundaries(
+        transferred_bytes,
+        target_bytes,
+        needs_prefix,
+        needs_suffix,
+    )
 }
 
 fn requires_line_boundary_normalization(
@@ -837,30 +823,6 @@ fn requires_line_boundary_normalization(
     }
 }
 
-fn needs_boundary_prefix(target_bytes: &[u8], boundary: usize) -> bool {
-    boundary > 0 && !is_line_break_byte(target_bytes[boundary - 1])
-}
-
-fn needs_boundary_suffix(target_bytes: &[u8], boundary: usize) -> bool {
-    boundary < target_bytes.len() && !is_line_break_byte(target_bytes[boundary])
-}
-
-fn preferred_target_newline(target_bytes: &[u8]) -> &'static [u8] {
-    if target_bytes.windows(2).any(|window| window == b"\r\n") {
-        b"\r\n"
-    } else {
-        b"\n"
-    }
-}
-
-fn ends_with_line_break(bytes: &[u8]) -> bool {
-    matches!(bytes.last(), Some(b'\n') | Some(b'\r'))
-}
-
-fn is_line_break_byte(byte: u8) -> bool {
-    byte == b'\n' || byte == b'\r'
-}
-
 fn selection_failure(
     action_index: usize,
     header_line: usize,
@@ -880,11 +842,13 @@ fn selection_failure(
     let code = match side {
         SelectionSide::Source => "SPLICE_SOURCE_SELECTION_INVALID",
         SelectionSide::Target => "SPLICE_TARGET_SELECTION_INVALID",
+        SelectionSide::Rewrite => unreachable!("splice runtime never uses rewrite selections"),
     }
     .to_string();
     let summary = match side {
         SelectionSide::Source => "source selection did not resolve against the current file text",
         SelectionSide::Target => "target selection did not resolve against the current file text",
+        SelectionSide::Rewrite => unreachable!("splice runtime never uses rewrite selections"),
     }
     .to_string();
     FailureDraft {
@@ -902,6 +866,9 @@ fn selection_failure(
         message: match side {
             SelectionSide::Source => format!("invalid source selection: {}", error.message()),
             SelectionSide::Target => format!("invalid target selection: {}", error.message()),
+            SelectionSide::Rewrite => {
+                unreachable!("splice runtime never uses rewrite selections")
+            }
         },
     }
 }
@@ -1124,72 +1091,7 @@ fn resolve_byte_selection(
     block: &SelectionBlock,
     file_bytes: &[u8],
 ) -> Result<ResolvedByteSelection, SelectionResolveError> {
-    let lines = split_file_lines(file_bytes);
-    let range = validate_selection_resolution(block, "file text", |line| {
-        lines
-            .get(line.line_number.saturating_sub(1))
-            .map(|actual| actual.body == line.visible_content.as_bytes())
-    })?;
-
-    let start = lines
-        .get(range.start_line - 1)
-        .ok_or_else(|| {
-            SelectionResolveError::new(
-                SelectionDiagnosticCode::Invalid,
-                format!(
-                    "selection line {} does not exist in the file text",
-                    range.start_line
-                ),
-                Some(range.first_item_index),
-            )
-        })?
-        .start;
-    let end = lines
-        .get(range.end_line - 1)
-        .ok_or_else(|| {
-            SelectionResolveError::new(
-                SelectionDiagnosticCode::Invalid,
-                format!(
-                    "selection line {} does not exist in the file text",
-                    range.end_line
-                ),
-                Some(range.last_item_index),
-            )
-        })?
-        .end;
-
-    Ok(ResolvedByteSelection {
-        start_offset: start,
-        end_offset: end,
-    })
-}
-
-fn split_file_lines(file_bytes: &[u8]) -> Vec<LineSpan> {
-    let mut lines = Vec::new();
-    let mut start = 0usize;
-    for (index, byte) in file_bytes.iter().enumerate() {
-        if *byte == b'\n' {
-            let body_end = if index > start && file_bytes[index - 1] == b'\r' {
-                index - 1
-            } else {
-                index
-            };
-            lines.push(LineSpan {
-                body: file_bytes[start..body_end].to_vec(),
-                start,
-                end: index + 1,
-            });
-            start = index + 1;
-        }
-    }
-    if start < file_bytes.len() {
-        lines.push(LineSpan {
-            body: file_bytes[start..].to_vec(),
-            start,
-            end: file_bytes.len(),
-        });
-    }
-    lines
+    resolve_selection_offsets(block, file_bytes, "file text")
 }
 
 fn compose_working_state(

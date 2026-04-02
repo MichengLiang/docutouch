@@ -63,6 +63,22 @@ fn splice_partial_failure_text() -> &'static str {
     "*** Begin Splice\n*** Copy From File: source-a.txt\n@@\n1 | alpha\n*** Append To File: dest-a.txt\n*** Copy From File: source-b.txt\n@@\n1 | beta\n*** Insert Before In File: missing.txt\n@@\n1 | beta\n*** End Splice\n"
 }
 
+fn rewrite_success_text() -> &'static str {
+    "*** Begin Rewrite\n*** Update File: app.txt\n@@ replace the selected line\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n"
+}
+
+fn rewrite_failure_text() -> &'static str {
+    "*** Begin Rewrite\n*** Update File: app.txt\n@@\n1 | wrong\n*** Delete\n*** End Rewrite\n"
+}
+
+fn rewrite_move_overwrite_text() -> &'static str {
+    "*** Begin Rewrite\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n"
+}
+
+fn rewrite_delete_missing_text() -> &'static str {
+    "*** Begin Rewrite\n*** Delete File: missing.txt\n*** End Rewrite\n"
+}
+
 struct PueueStubFixture {
     bin_path: PathBuf,
     runtime_dir: PathBuf,
@@ -1200,6 +1216,125 @@ async fn cli_splice_partial_failure_matches_mcp_output() -> anyhow::Result<()> {
         std::fs::read_to_string(cli_temp.path().join("dest-a.txt"))?,
         "alpha\n"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_rewrite_success_matches_mcp_output_and_reads_stdin() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    std::fs::write(server_temp.path().join("app.txt"), "old\n")?;
+    std::fs::write(cli_temp.path().join("app.txt"), "old\n")?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "apply_rewrite",
+        json!({ "rewrite": rewrite_success_text() }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["cli", "rewrite"],
+        Some(rewrite_success_text()),
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stderr).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(cli_temp.path().join("app.txt"))?,
+        "new"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_rewrite_failure_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    std::fs::write(server_temp.path().join("app.txt"), "old\n")?;
+    std::fs::write(cli_temp.path().join("app.txt"), "old\n")?;
+
+    let server_error = call_server_tool_error(
+        server_temp.path(),
+        "apply_rewrite",
+        json!({ "rewrite": rewrite_failure_text() }),
+    )
+    .await?;
+
+    let cli_output = run_cli(cli_temp.path(), &["rewrite"], Some(rewrite_failure_text()))?;
+    assert!(!cli_output.status.success());
+    let cli_stderr = utf8(&cli_output.stderr);
+    let normalized_cli = normalize_patch_failure_text(&cli_stderr, cli_temp.path());
+    let normalized_server = normalize_patch_failure_text(&server_error, server_temp.path());
+    assert_eq!(normalized_cli, normalized_server);
+    assert!(utf8(&cli_output.stdout).is_empty());
+    assert!(normalized_cli.contains("error[REWRITE_SELECTION_INVALID]"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_rewrite_move_overwrite_warning_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    std::fs::write(server_temp.path().join("from.txt"), "old\n")?;
+    std::fs::write(server_temp.path().join("to.txt"), "dest\n")?;
+    std::fs::write(cli_temp.path().join("from.txt"), "old\n")?;
+    std::fs::write(cli_temp.path().join("to.txt"), "dest\n")?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "apply_rewrite",
+        json!({ "rewrite": rewrite_move_overwrite_text() }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["rewrite"],
+        Some(rewrite_move_overwrite_text()),
+    )?;
+    assert!(cli_output.status.success());
+    let cli_stdout = utf8(&cli_output.stdout);
+    assert_eq!(cli_stdout, server_output);
+    assert!(utf8(&cli_output.stderr).is_empty());
+    assert!(cli_stdout.contains("A to.txt"));
+    assert!(cli_stdout.contains("D from.txt"));
+    assert!(!cli_stdout.contains("M to.txt"));
+    assert!(cli_stdout.contains("Warnings:"));
+    assert!(cli_stdout.contains("MOVE_REPLACED_EXISTING_DESTINATION"));
+    assert_eq!(
+        std::fs::read_to_string(cli_temp.path().join("to.txt"))?,
+        "new"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_rewrite_delete_missing_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+
+    let server_error = call_server_tool_error(
+        server_temp.path(),
+        "apply_rewrite",
+        json!({ "rewrite": rewrite_delete_missing_text() }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["rewrite"],
+        Some(rewrite_delete_missing_text()),
+    )?;
+    assert!(!cli_output.status.success());
+    let cli_stderr = utf8(&cli_output.stderr);
+    let normalized_cli = normalize_patch_failure_text(&cli_stderr, cli_temp.path());
+    let normalized_server = normalize_patch_failure_text(&server_error, server_temp.path());
+    assert_eq!(normalized_cli, normalized_server);
+    assert!(utf8(&cli_output.stdout).is_empty());
+    assert!(normalized_cli.contains("error[REWRITE_TARGET_STATE_INVALID]"));
+    assert!(normalized_cli.contains("delete target does not exist"));
     Ok(())
 }
 

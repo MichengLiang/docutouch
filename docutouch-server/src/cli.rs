@@ -1,4 +1,5 @@
 use crate::patch_adapter::{PatchInvocationAdapter, PatchNumberedEvidenceMode};
+use crate::rewrite_adapter::RewriteInvocationAdapter;
 use crate::splice_adapter::SpliceInvocationAdapter;
 use crate::tool_service::{ToolService, render_read_surface_content, render_search_surface};
 use crate::transport_shell::TransportSourceProvenance;
@@ -23,6 +24,7 @@ enum Command {
     Search(SearchCommand),
     WaitPueue(WaitPueueCommand),
     Patch(PatchCommand),
+    Rewrite(RewriteCommand),
     Splice(SpliceCommand),
 }
 
@@ -64,6 +66,10 @@ struct PatchCommand {
 
 struct SpliceCommand {
     splice_file: Option<String>,
+}
+
+struct RewriteCommand {
+    rewrite_file: Option<String>,
 }
 
 pub async fn dispatch_from_env() -> Result<Dispatch> {
@@ -166,6 +172,7 @@ fn parse_command(args: &[String]) -> Result<Command, String> {
         "search" => parse_search_command(&args[1..]).map(Command::Search),
         "wait-pueue" => parse_wait_pueue_command(&args[1..]).map(Command::WaitPueue),
         "patch" => parse_patch_command(&args[1..]).map(Command::Patch),
+        "rewrite" => parse_rewrite_command(&args[1..]).map(Command::Rewrite),
         "splice" => parse_splice_command(&args[1..]).map(Command::Splice),
         other => Err(format!("unknown subcommand: {other}")),
     }
@@ -400,6 +407,17 @@ fn parse_splice_command(args: &[String]) -> Result<SpliceCommand, String> {
     })
 }
 
+fn parse_rewrite_command(args: &[String]) -> Result<RewriteCommand, String> {
+    Ok(RewriteCommand {
+        rewrite_file: parse_optional_transport_file_arg(
+            args,
+            "rewrite",
+            "--rewrite-file",
+            "rewrite file",
+        )?,
+    })
+}
+
 async fn run_command(command: Command) -> Result<i32> {
     match command {
         Command::List(command) => run_list(command).await,
@@ -407,6 +425,7 @@ async fn run_command(command: Command) -> Result<i32> {
         Command::Search(command) => run_search(command).await,
         Command::WaitPueue(command) => run_wait_pueue(command).await,
         Command::Patch(command) => run_patch(command).await,
+        Command::Rewrite(command) => run_rewrite(command).await,
         Command::Splice(command) => run_splice(command).await,
     }
 }
@@ -506,6 +525,15 @@ async fn run_splice(command: SpliceCommand) -> Result<i32> {
     let splice_source = transport_source_from_path(splice_source_path.as_deref());
     let adapter = SpliceInvocationAdapter::for_cli(cwd, splice_source);
     emit_text_result(adapter.execute(&splice))
+}
+
+async fn run_rewrite(command: RewriteCommand) -> Result<i32> {
+    let cwd = std::env::current_dir()?;
+    let rewrite_source_path = resolve_transport_source_path(&cwd, command.rewrite_file.as_deref());
+    let rewrite = read_transport_text(rewrite_source_path.as_deref())?;
+    let rewrite_source = transport_source_from_path(rewrite_source_path.as_deref());
+    let adapter = RewriteInvocationAdapter::for_cli(cwd, rewrite_source);
+    emit_text_result(adapter.execute(&rewrite))
 }
 
 fn resolve_transport_source_path(cwd: &Path, source_file: Option<&str>) -> Option<PathBuf> {
@@ -677,7 +705,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 
@@ -699,8 +727,8 @@ fn write_stderr(message: &str) -> Result<()> {
 mod tests {
     use super::{
         failed_patch_workspace_root, infer_patch_execution_anchor,
-        parse_optional_transport_file_arg, parse_patch_command, parse_splice_command,
-        read_transport_text, resolve_cli_path, resolve_transport_source_path,
+        parse_optional_transport_file_arg, parse_patch_command, parse_rewrite_command,
+        parse_splice_command, read_transport_text, resolve_cli_path, resolve_transport_source_path,
         transport_source_from_path,
     };
     use crate::patch_adapter::PatchNumberedEvidenceMode;
@@ -713,10 +741,13 @@ mod tests {
             .expect("patch parse should succeed");
         let splice = parse_splice_command(&["input.splice".to_string()])
             .expect("splice parse should succeed");
+        let rewrite = parse_rewrite_command(&["--rewrite-file=input.rewrite".to_string()])
+            .expect("rewrite parse should succeed");
 
         assert_eq!(patch.patch_file.as_deref(), Some("input.patch"));
         assert_eq!(patch.numbered_evidence_mode, None);
         assert_eq!(splice.splice_file.as_deref(), Some("input.splice"));
+        assert_eq!(rewrite.rewrite_file.as_deref(), Some("input.rewrite"));
     }
 
     #[test]

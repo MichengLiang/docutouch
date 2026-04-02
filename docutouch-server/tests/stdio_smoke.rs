@@ -86,6 +86,18 @@ fn splice_text() -> String {
     "*** Begin Splice\n*** Copy From File: source.txt\n@@\n1 | alpha\n*** Append To File: dest.txt\n*** End Splice\n".to_string()
 }
 
+fn rewrite_text() -> String {
+    "*** Begin Rewrite\n*** Update File: app.txt\n@@ replace the selected line\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n".to_string()
+}
+
+fn rewrite_move_overwrite_text() -> String {
+    "*** Begin Rewrite\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n".to_string()
+}
+
+fn rewrite_delete_missing_text() -> String {
+    "*** Begin Rewrite\n*** Delete File: missing.txt\n*** End Rewrite\n".to_string()
+}
+
 struct PueueStubFixture {
     bin_path: PathBuf,
     runtime_dir: PathBuf,
@@ -321,6 +333,7 @@ async fn server_lists_expected_tools() -> anyhow::Result<()> {
         assert!(tool_names.contains(&"wait_pueue".to_string()));
         assert!(!tool_names.contains(&"read_files".to_string()));
         assert!(tool_names.contains(&"apply_patch".to_string()));
+        assert!(tool_names.contains(&"apply_rewrite".to_string()));
         assert!(tool_names.contains(&"apply_splice".to_string()));
 
         Ok(())
@@ -675,6 +688,115 @@ async fn server_round_trips_workspace_splice_and_read() -> anyhow::Result<()> {
             })
             .await?;
         assert_eq!(read_result.content[0].as_text().unwrap().text, "alpha\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_round_trips_workspace_rewrite_and_read() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("app.txt"), "old\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+
+        let rewrite_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_rewrite".into(),
+                arguments: Some(json_object(json!({ "rewrite": rewrite_text() }))),
+                task: None,
+            })
+            .await?;
+        let message = &rewrite_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("M app.txt"));
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": "app.txt" }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "new");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_rewrite_warns_and_uses_final_path_accounting_for_move_overwrite()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("from.txt"), "old\n")?;
+    std::fs::write(temp.path().join("to.txt"), "dest\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+
+        let rewrite_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_rewrite".into(),
+                arguments: Some(json_object(
+                    json!({ "rewrite": rewrite_move_overwrite_text() }),
+                )),
+                task: None,
+            })
+            .await?;
+        let message = &rewrite_result.content[0].as_text().unwrap().text;
+        assert!(message.contains("Success. Updated the following files:"));
+        assert!(message.contains("A to.txt"));
+        assert!(message.contains("D from.txt"));
+        assert!(!message.contains("M to.txt"));
+        assert!(message.contains("Warnings:"));
+        assert!(message.contains("MOVE_REPLACED_EXISTING_DESTINATION"));
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": "to.txt" }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "new");
+        assert!(!temp.path().join("from.txt").exists());
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_rewrite_delete_missing_is_reported_as_hard_failure() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_rewrite".into(),
+                arguments: Some(json_object(
+                    json!({ "rewrite": rewrite_delete_missing_text() }),
+                )),
+                task: None,
+            })
+            .await
+            .expect_err("missing delete target should fail");
+
+        let message = err.to_string();
+        assert!(message.contains("error[REWRITE_TARGET_STATE_INVALID]"));
+        assert!(message.contains("delete target does not exist"));
+        assert!(message.contains("2 | *** Delete File: missing.txt"));
+        assert!(message.contains("caused by:\n  delete target does not exist"));
 
         Ok(())
     })
@@ -1764,6 +1886,49 @@ async fn server_apply_splice_accepts_absolute_paths_without_workspace() -> anyho
             })
             .await?;
         assert_eq!(read_result.content[0].as_text().unwrap().text, "alpha\n");
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_apply_rewrite_accepts_absolute_paths_without_workspace() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let launch_dir = temp.path().join("launch");
+    std::fs::create_dir_all(&launch_dir)?;
+    let target = temp.path().join("absolute-app.txt");
+    std::fs::write(&target, "old\n")?;
+    with_server_client!(launch_dir.as_path(), client, {
+        let rewrite_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "apply_rewrite".into(),
+                arguments: Some(json_object(json!({
+                    "rewrite": format!(
+                        "*** Begin Rewrite\n*** Update File: {}\n@@\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n",
+                        target.display()
+                    )
+                }))),
+                task: None,
+            })
+            .await?;
+        assert!(
+            rewrite_result.content[0]
+                .as_text()
+                .unwrap()
+                .text
+                .contains(&target.display().to_string().replace('\\', "/"))
+        );
+
+        let read_result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "read_file".into(),
+                arguments: Some(json_object(json!({ "relative_path": target }))),
+                task: None,
+            })
+            .await?;
+        assert_eq!(read_result.content[0].as_text().unwrap().text, "new");
 
         Ok(())
     })

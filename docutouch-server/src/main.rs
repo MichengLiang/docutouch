@@ -2,6 +2,7 @@ mod cli;
 mod patch_adapter;
 #[allow(dead_code)]
 mod pueue;
+mod rewrite_adapter;
 mod server;
 mod splice_adapter;
 mod tool_service;

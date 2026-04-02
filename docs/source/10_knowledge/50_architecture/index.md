@@ -57,6 +57,9 @@
 * - `apply_patch_diagnostics_spec.md`
   - Source-bearing article
   - 承载 `apply_patch` diagnostics subsystem 的 accepted architecture 与 rendering contract
+* - `apply_rewrite_architecture.md`
+  - Source-bearing article
+  - 承载 `apply_rewrite` 的 parser/selection/runtime/presentation/transport 分层与 shared-vs-owned boundary
 * - `apply_splice_architecture.md`
   - Source-bearing article
   - 承载 `apply_splice` shared-vs-owned boundary 与 internal substrate posture
@@ -75,6 +78,7 @@
 
 authoring_contract
 apply_patch_diagnostics_spec
+apply_rewrite_architecture
 apply_splice_architecture
 cli_adapter_spec
 pueue_task_handle_adapter

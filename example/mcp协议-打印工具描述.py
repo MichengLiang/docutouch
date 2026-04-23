@@ -9,9 +9,10 @@ from fastmcp.client.transports import StdioTransport
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEBUG_EXE = REPO_ROOT / "target" / "debug" / "docutouch.exe"
+# DEBUG_EXE = REPO_ROOT / "target" / "debug" / "docutouch.exe"
 RELEASE_EXE = REPO_ROOT / "target" / "release" / "docutouch.exe"
-SERVER_EXE = DEBUG_EXE if DEBUG_EXE.exists() else RELEASE_EXE
+# SERVER_EXE = DEBUG_EXE if DEBUG_EXE.exists() else RELEASE_EXE
+SERVER_EXE = RELEASE_EXE
 WORKSPACE = REPO_ROOT / "tmp" / "example_workspace"
 STDERR_LOG = WORKSPACE / "diagnostics_tool_params_stderr.log"
 

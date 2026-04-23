@@ -63,6 +63,16 @@ DOCUTOUCH_DEFAULT_WORKSPACE=/absolute/path/to/project DOCUTOUCH_APPLY_PATCH_NUMB
 
 在 Windows 上，`command` 通常会是 `C:\\...\\docutouch.exe`。
 
+在 Linux 或 WSL 里，`command` 应该指向 Linux 二进制 `docutouch`，不要指向 Windows `docutouch.exe`。
+
+如果你在 WSL 里启动的是 Windows `docutouch.exe`，那么：
+
+- 进程实际运行在 Windows 侧，而不是 Linux 侧
+- `DOCUTOUCH_DEFAULT_WORKSPACE=/home/...` 这类 Linux 路径会按 Windows 文件系统语义校验
+- 结果通常会被判成不存在并被忽略
+
+因此，WSL 场景下如果 workspace 是 `/home/...` 或 `/mnt/...` 这类 Linux 路径，应该使用 Linux 版 `docutouch`，而不是 `.exe`。
+
 如果你还在源码态调试，也可以继续用 `cargo run`：
 
 ```json

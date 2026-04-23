@@ -233,6 +233,10 @@ For hosts that use the common stdio MCP config shape (`mcpServers -> name -> com
 
 On Windows, `command` will typically point to `docutouch.exe`.
 
+On Linux or WSL, `command` should point to the Linux `docutouch` binary, not the Windows `docutouch.exe`.
+
+If you launch the Windows `.exe` from WSL, the process is still running with Windows filesystem semantics. A value such as `DOCUTOUCH_DEFAULT_WORKSPACE=/home/t103o/workbench` will then be validated as a Windows path and will usually be rejected. Use the Linux binary when your workspace path is a Linux path such as `/home/...` or `/mnt/...`.
+
 If you are still iterating from source, a development config can continue to use `cargo run`:
 
 ```json

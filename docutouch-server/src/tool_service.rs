@@ -8,7 +8,8 @@ use crate::splice_adapter::SpliceInvocationAdapter;
 use anyhow::Result;
 use docutouch_core::{
     DirectoryListOptions, PatchWorkspaceRequirement, ReadFileLineRange, ReadFileOptions,
-    ReadFileSampledViewOptions, RewriteWorkspaceRequirement, SearchTextView,
+    ReadFileSampledViewOptions, RewriteWorkspaceRequirement, SearchTextOutputMode,
+    SearchTextQueryMode, SearchTextResult, SearchTextSurfaceKind, SearchTextView,
     SpliceWorkspaceRequirement, TimestampField, list_directory, normalize_sampled_view_options,
     parse_read_file_line_range_text, patch_workspace_requirement, read_file_with_sampled_view,
     rewrite_workspace_requirement, search_text, splice_workspace_requirement,
@@ -30,7 +31,7 @@ const APPLY_REWRITE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_re
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
 const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
-const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "基于 ripgrep 的文本搜索包装。保留原始终端 `rg` 作为无限制逃生口；当前工具服务于常见的 LLM 搜索路径，按文件分组返回结果，并区分 `preview` 概览视图与 `full` 全量分组视图。`path` / `path[]` 除了文件或目录 path 外，也接受形如 `pueue-log:<id>` 的 task-log handle，可直接搜索 `wait_pueue` 返回的日志句柄。`rg_args` 仅用于 search-behavior flags，如 `-F`、`-i`、`-g`、`-P`；render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。";
+const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 接受任意 ripgrep 参数；工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。";
 const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
 #[derive(Clone)]
@@ -132,19 +133,29 @@ pub struct ApplyRewriteArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchTextArgs {
-    #[schemars(description = "要搜索的文本或 ripgrep 模式。")]
+    #[schemars(description = "要搜索的文本或模式。默认会先按 regex 解释；若 `query_mode` 为 `auto` 且 regex 解析失败，会自动回退为 literal 搜索。对 `--files`、`--type-list` 这类 queryless raw rg 模式，可传空字符串。")]
     pub query: String,
     #[schemars(
         description = "必填搜索范围。可传单个 relative/absolute path，也可传形如 `pueue-log:<id>` 的 task-log handle；还可传由文件、目录或 `pueue-log:<id>` 组成的 path 数组，数组中的范围会合并为同一次搜索。"
     )]
     pub path: SearchTextPathInput,
     #[schemars(
-        description = "可选的原始 ripgrep 参数字符串，用作高级 escape hatch。仅推荐 search-behavior flags，例如 `-F`、`-i`、`-g '*.rs'`、`-P`。render-shaping flags（如 `--json`、`-n`、`-c`、`-l`、`-A/-B/-C`）由 `search_text` 自身保留控制。"
+        description = "可选的原始 ripgrep 参数字符串。接受任意 `rg` 参数；工具会根据这些参数自动推断更合适的输出模式，例如 grouped、grouped_context、counts、files、raw_text、raw_json。"
     )]
     #[serde(default)]
     pub rg_args: String,
     #[schemars(
-        description = "搜索结果视图。`preview` 返回显式概览并附 omission accounting；`full` 返回全量分组结果。默认 `preview`。"
+        description = "query 解释方式。`auto` 默认先按 regex 执行；若 regex 解析失败且未显式要求 regex，则自动回退为 literal。也可显式指定 `literal` 或 `regex`。"
+    )]
+    #[serde(default)]
+    pub query_mode: SearchTextQueryModeInput,
+    #[schemars(
+        description = "输出模式。`auto` 默认根据 `rg_args` 自动选择 grouped、grouped_context、counts、files、raw_text、raw_json 中最合适的一种；也可显式指定。"
+    )]
+    #[serde(default)]
+    pub output_mode: SearchTextOutputModeInput,
+    #[schemars(
+        description = "grouped 系列结果视图。`preview` 返回显式概览并附 omission accounting；`full` 返回全量 grouped 结果。默认 `preview`；raw_text/raw_json/counts/files 模式下会被忽略。"
     )]
     #[serde(default)]
     pub view: SearchTextViewInput,
@@ -180,6 +191,28 @@ pub enum SearchTextViewInput {
     Full,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchTextQueryModeInput {
+    #[default]
+    Auto,
+    Literal,
+    Regex,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchTextOutputModeInput {
+    #[default]
+    Auto,
+    Grouped,
+    GroupedContext,
+    Counts,
+    Files,
+    RawText,
+    RawJson,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitModeInput {
@@ -211,6 +244,7 @@ pub(crate) struct ResolvedSearchTextPaths {
     pub search_paths: Vec<PathBuf>,
     pub display_scope: String,
     pub path_overrides: Vec<(String, String)>,
+    pub raw_path_overrides: Vec<(String, String)>,
     _temp_surface_dir: Option<PueueCleanSurfaceTempDir>,
 }
 
@@ -347,9 +381,6 @@ impl ToolService {
     }
 
     async fn search_text_impl(&self, args: SearchTextArgs) -> Result<String, ServiceError> {
-        if args.query.trim().is_empty() {
-            return Err(ServiceError::invalid_argument("query cannot be empty"));
-        }
         if args.path.is_empty() {
             return Err(ServiceError::invalid_argument("path cannot be empty"));
         }
@@ -365,6 +396,8 @@ impl ToolService {
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>(),
             &args.rg_args,
+            args.query_mode.into(),
+            args.output_mode.into(),
             args.view.into(),
             display_base_dir.as_deref(),
             display_base_dir.as_deref(),
@@ -514,6 +547,30 @@ impl From<SearchTextViewInput> for SearchTextView {
         match value {
             SearchTextViewInput::Preview => SearchTextView::Preview,
             SearchTextViewInput::Full => SearchTextView::Full,
+        }
+    }
+}
+
+impl From<SearchTextQueryModeInput> for SearchTextQueryMode {
+    fn from(value: SearchTextQueryModeInput) -> Self {
+        match value {
+            SearchTextQueryModeInput::Auto => SearchTextQueryMode::Auto,
+            SearchTextQueryModeInput::Literal => SearchTextQueryMode::Literal,
+            SearchTextQueryModeInput::Regex => SearchTextQueryMode::Regex,
+        }
+    }
+}
+
+impl From<SearchTextOutputModeInput> for SearchTextOutputMode {
+    fn from(value: SearchTextOutputModeInput) -> Self {
+        match value {
+            SearchTextOutputModeInput::Auto => SearchTextOutputMode::Auto,
+            SearchTextOutputModeInput::Grouped => SearchTextOutputMode::Grouped,
+            SearchTextOutputModeInput::GroupedContext => SearchTextOutputMode::GroupedContext,
+            SearchTextOutputModeInput::Counts => SearchTextOutputMode::Counts,
+            SearchTextOutputModeInput::Files => SearchTextOutputMode::Files,
+            SearchTextOutputModeInput::RawText => SearchTextOutputMode::RawText,
+            SearchTextOutputModeInput::RawJson => SearchTextOutputMode::RawJson,
         }
     }
 }
@@ -1012,6 +1069,8 @@ pub(crate) async fn render_search_surface(
     query: &str,
     raw_paths: &[String],
     rg_args: &str,
+    query_mode: SearchTextQueryMode,
+    output_mode: SearchTextOutputMode,
     view: SearchTextView,
     workspace: Option<&Path>,
     display_base_dir: Option<&Path>,
@@ -1021,16 +1080,19 @@ pub(crate) async fn render_search_surface(
         query,
         &resolved.search_paths,
         rg_args,
+        query_mode,
+        output_mode,
         view,
         display_base_dir,
     )
     .await
     .map_err(ServiceError::invalid_argument)?;
-    Ok(rewrite_search_text_surface(
+    rewrite_search_surface_result(
         rendered,
         &resolved.display_scope,
         &resolved.path_overrides,
-    ))
+        &resolved.raw_path_overrides,
+    )
 }
 
 pub(crate) async fn resolve_search_surface_paths(
@@ -1041,6 +1103,7 @@ pub(crate) async fn resolve_search_surface_paths(
     let mut search_paths = Vec::new();
     let mut display_labels = Vec::new();
     let mut path_overrides = Vec::new();
+    let mut raw_path_overrides = Vec::new();
     let mut seen = HashSet::new();
     let mut temp_surface_dir = None;
 
@@ -1074,9 +1137,20 @@ pub(crate) async fn resolve_search_surface_paths(
 
         if seen.insert(resolved_path.clone()) {
             let display_path = display_path_for_output(display_base_dir, &resolved_path);
-            let display_label = handle_task_id
-                .map(format_task_log_handle)
-                .unwrap_or_else(|| display_path.clone());
+            let display_label = if let Some(task_id) = handle_task_id {
+                format_task_log_handle(task_id)
+            } else {
+                let raw_display = normalize_display_text(raw_path);
+                if Path::new(raw_path).is_relative() && !raw_display.is_empty() {
+                    raw_display
+                } else {
+                    display_path.clone()
+                }
+            };
+            let raw_path = normalize_display_text(&normalize_display_path(&resolved_path).display().to_string());
+            if raw_path != display_label {
+                raw_path_overrides.push((raw_path, display_label.clone()));
+            }
             if display_label != display_path {
                 path_overrides.push((display_path, display_label.clone()));
             }
@@ -1089,8 +1163,30 @@ pub(crate) async fn resolve_search_surface_paths(
         search_paths,
         display_scope: format_display_scope(&display_labels),
         path_overrides,
+        raw_path_overrides,
         _temp_surface_dir: temp_surface_dir,
     })
+}
+
+pub(crate) fn rewrite_search_surface_result(
+    rendered: SearchTextResult,
+    display_scope: &str,
+    path_overrides: &[(String, String)],
+    raw_path_overrides: &[(String, String)],
+) -> Result<String, ServiceError> {
+    match rendered.surface_kind {
+        SearchTextSurfaceKind::StructuredText => Ok(rewrite_search_text_surface(
+            rendered.content,
+            display_scope,
+            path_overrides,
+        )),
+        SearchTextSurfaceKind::RawText => Ok(rewrite_raw_text_search_surface(
+            rendered.content,
+            raw_path_overrides,
+        )),
+        SearchTextSurfaceKind::RawJson => rewrite_raw_json_search_surface(rendered.content, raw_path_overrides)
+            .map_err(ServiceError::invalid_argument),
+    }
 }
 
 pub(crate) fn rewrite_search_text_surface(
@@ -1115,11 +1211,84 @@ pub(crate) fn rewrite_search_text_surface(
                     updated = updated.replacen(&needle, &format!("{display_path} ("), 1);
                     break;
                 }
+                let compact = format!("] {resolved_path}");
+                if updated.contains(&compact) {
+                    updated = updated.replacen(&compact, &format!("] {display_path}"), 1);
+                    break;
+                }
             }
             updated
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn rewrite_raw_text_search_surface(rendered: String, path_overrides: &[(String, String)]) -> String {
+    rendered
+        .lines()
+        .map(|line| {
+            let mut updated = line.to_string();
+            for (resolved_path, display_path) in path_overrides {
+                let normalized = normalize_display_text(&updated);
+                if normalized == *resolved_path {
+                    updated = display_path.clone();
+                    break;
+                }
+                if let Some(rest) = normalized.strip_prefix(resolved_path) {
+                    if rest.is_empty()
+                        || rest.starts_with('/')
+                        || rest.starts_with(':')
+                        || rest.starts_with('-')
+                        || rest.starts_with(' ')
+                    {
+                        updated = format!("{display_path}{rest}");
+                        break;
+                    }
+                }
+            }
+            updated
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn rewrite_raw_json_search_surface(
+    rendered: String,
+    path_overrides: &[(String, String)],
+) -> Result<String, String> {
+    let mut lines = Vec::new();
+    for raw_line in rendered.lines() {
+        if raw_line.trim().is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut value: Value = serde_json::from_str(raw_line)
+            .map_err(|error| format!("Failed to rewrite raw JSON search surface: {error}"))?;
+        if let Some(path_ref) = value.pointer("/data/path/text").and_then(Value::as_str)
+            && let Some(rewritten_path) = path_overrides.iter().find_map(|(resolved_path, display_path)| {
+                let normalized = normalize_display_text(path_ref);
+                if normalized == *resolved_path {
+                    return Some(display_path.clone());
+                }
+                normalized.strip_prefix(resolved_path).and_then(|rest| {
+                    if rest.starts_with('/') {
+                        Some(format!("{display_path}{rest}"))
+                    } else {
+                        None
+                    }
+                })
+            })
+        {
+            if let Some(path_mut) = value.pointer_mut("/data/path/text") {
+                *path_mut = Value::String(rewritten_path);
+            }
+        }
+        lines.push(
+            serde_json::to_string(&value)
+                .map_err(|error| format!("Failed to rewrite raw JSON search surface: {error}"))?,
+        );
+    }
+    Ok(lines.join("\n"))
 }
 
 pub(crate) fn display_path_for_output(display_base_dir: Option<&Path>, path: &Path) -> String {
@@ -1151,7 +1320,15 @@ fn strip_windows_verbatim_prefix(raw: &str) -> String {
 }
 
 fn normalize_display_text(raw: &str) -> String {
-    raw.replace('\\', "/")
+    let mut normalized = raw.replace('\\', "/");
+    normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized).to_string();
+    while normalized.contains("/./") {
+        normalized = normalized.replace("/./", "/");
+    }
+    if normalized.ends_with("/.") {
+        normalized.truncate(normalized.len() - 2);
+    }
+    normalized
 }
 
 fn resolve_user_path(raw_path: &str, workspace: Option<&Path>) -> Result<PathBuf, ServiceError> {

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 const SEARCH_TEXT_PREVIEW_MAX_FILES: usize = 8;
 const SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE: usize = 3;
+const SEARCH_TEXT_PREVIEW_MAX_CONTEXT_LINES_PER_FILE: usize = 6;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchTextView {
@@ -13,101 +14,614 @@ pub enum SearchTextView {
     Full,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchTextQueryMode {
+    #[default]
+    Auto,
+    Literal,
+    Regex,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SearchTextOutputMode {
+    #[default]
+    Auto,
+    Grouped,
+    GroupedContext,
+    Counts,
+    Files,
+    RawText,
+    RawJson,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchTextSurfaceKind {
+    StructuredText,
+    RawText,
+    RawJson,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SearchTextResult {
+    pub content: String,
+    pub surface_kind: SearchTextSurfaceKind,
+}
+
 #[derive(Debug)]
 struct SearchTextGroup {
     path: String,
-    matches: Vec<SearchTextMatch>,
+    entries: Vec<SearchTextEntry>,
+    matched_lines: usize,
     total_hits: usize,
 }
 
 #[derive(Debug)]
-struct SearchTextMatch {
+struct SearchTextEntry {
     line_number: usize,
     text: String,
+    kind: SearchTextEntryKind,
     hit_count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SearchTextEntryKind {
+    Match,
+    Context,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueryInterpretation {
+    Regex,
+    Literal,
+    LiteralFallback,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CountSurfaceKind {
+    MatchedLines,
+    Matches,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilesSurfaceKind {
+    WithMatches,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedOutputMode {
+    Grouped,
+    GroupedContext { before: usize, after: usize },
+    Counts(CountSurfaceKind),
+    Files(FilesSurfaceKind),
+    RawText,
+    RawJson,
+}
+
+impl ResolvedOutputMode {
+    fn surface_kind(self) -> SearchTextSurfaceKind {
+        match self {
+            Self::RawText => SearchTextSurfaceKind::RawText,
+            Self::RawJson => SearchTextSurfaceKind::RawJson,
+            Self::Grouped
+            | Self::GroupedContext { .. }
+            | Self::Counts(_)
+            | Self::Files(_) => SearchTextSurfaceKind::StructuredText,
+        }
+    }
+
+    fn is_raw(self) -> bool {
+        matches!(self, Self::RawText | Self::RawJson)
+    }
+
+    fn label(self, view: SearchTextView) -> &'static str {
+        match self {
+            Self::Grouped => view.label(),
+            Self::GroupedContext { .. } => "grouped_context",
+            Self::Counts(_) => "counts",
+            Self::Files(_) => "files",
+            Self::RawText => "raw_text",
+            Self::RawJson => "raw_json",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedRgArgs {
+    tokens: Vec<String>,
+    has_json: bool,
+    has_count: bool,
+    has_count_matches: bool,
+    has_files_with_matches: bool,
+    has_files_without_match: bool,
+    has_files: bool,
+    has_heading: bool,
+    has_replace: bool,
+    has_type_list: bool,
+    context_before: Option<usize>,
+    context_after: Option<usize>,
+    explicit_regex_requested: bool,
+    queryless_hint: bool,
+}
+
+impl ParsedRgArgs {
+    fn parse(rg_args: &str) -> Result<Self, String> {
+        let trimmed = rg_args.trim();
+        if trimmed.is_empty() {
+            return Ok(Self {
+                tokens: Vec::new(),
+                has_json: false,
+                has_count: false,
+                has_count_matches: false,
+                has_files_with_matches: false,
+                has_files_without_match: false,
+                has_files: false,
+                has_heading: false,
+                has_replace: false,
+                has_type_list: false,
+                context_before: None,
+                context_after: None,
+                explicit_regex_requested: false,
+                queryless_hint: false,
+            });
+        }
+
+        let tokens =
+            shlex::split(trimmed).ok_or_else(|| "rg_args contains invalid quoting".to_string())?;
+        let mut parsed = Self {
+            tokens,
+            has_json: false,
+            has_count: false,
+            has_count_matches: false,
+            has_files_with_matches: false,
+            has_files_without_match: false,
+            has_files: false,
+            has_heading: false,
+            has_replace: false,
+            has_type_list: false,
+            context_before: None,
+            context_after: None,
+            explicit_regex_requested: false,
+            queryless_hint: false,
+        };
+
+        let mut index = 0usize;
+        while index < parsed.tokens.len() {
+            let token = parsed.tokens[index].as_str();
+            match token {
+                "--json" => parsed.has_json = true,
+                "-c" | "--count" => parsed.has_count = true,
+                "--count-matches" => parsed.has_count_matches = true,
+                "-l" | "--files-with-matches" => parsed.has_files_with_matches = true,
+                "--files-without-match" => parsed.has_files_without_match = true,
+                "--files" => {
+                    parsed.has_files = true;
+                    parsed.queryless_hint = true;
+                }
+                "--heading" => parsed.has_heading = true,
+                "--replace" => parsed.has_replace = true,
+                "--type-list" => {
+                    parsed.has_type_list = true;
+                    parsed.queryless_hint = true;
+                }
+                "-P" | "--pcre2" | "-e" | "--regexp" | "-f" | "--file" => {
+                    parsed.explicit_regex_requested = true;
+                }
+                "--engine" => {
+                    parsed.explicit_regex_requested = true;
+                    index += 1;
+                }
+                "-A" | "--after-context" => {
+                    parsed.context_after = Some(parse_following_usize(&parsed.tokens, index));
+                    index += 1;
+                }
+                "-B" | "--before-context" => {
+                    parsed.context_before = Some(parse_following_usize(&parsed.tokens, index));
+                    index += 1;
+                }
+                "-C" | "--context" => {
+                    let value = parse_following_usize(&parsed.tokens, index);
+                    parsed.context_before = Some(value);
+                    parsed.context_after = Some(value);
+                    index += 1;
+                }
+                "--color" => {
+                    index += 1;
+                }
+                _ => {
+                    if token.starts_with("--after-context=") {
+                        parsed.context_after = Some(parse_inline_usize(token));
+                    } else if token.starts_with("--before-context=") {
+                        parsed.context_before = Some(parse_inline_usize(token));
+                    } else if token.starts_with("--context=") {
+                        let value = parse_inline_usize(token);
+                        parsed.context_before = Some(value);
+                        parsed.context_after = Some(value);
+                    } else if token.starts_with("-A") && token.len() > 2 {
+                        parsed.context_after = Some(parse_short_inline_usize(token));
+                    } else if token.starts_with("-B") && token.len() > 2 {
+                        parsed.context_before = Some(parse_short_inline_usize(token));
+                    } else if token.starts_with("-C") && token.len() > 2 {
+                        let value = parse_short_inline_usize(token);
+                        parsed.context_before = Some(value);
+                        parsed.context_after = Some(value);
+                    } else if token.starts_with("--color=") {
+                        // Absorbed by structured modes, preserved by raw modes.
+                    } else if token.starts_with("--engine=") {
+                        parsed.explicit_regex_requested = true;
+                    }
+                }
+            }
+            index += 1;
+        }
+
+        Ok(parsed)
+    }
+
+    fn context_requested(&self) -> bool {
+        self.context_before.unwrap_or(0) > 0 || self.context_after.unwrap_or(0) > 0
+    }
+
+    fn output_family_count(&self) -> usize {
+        let mut count = 0usize;
+        if self.has_json {
+            count += 1;
+        }
+        if self.has_count || self.has_count_matches {
+            count += 1;
+        }
+        if self.has_files_with_matches || self.has_files_without_match || self.has_files {
+            count += 1;
+        }
+        if self.context_requested() {
+            count += 1;
+        }
+        if self.requires_raw_text_mode() {
+            count += 1;
+        }
+        count
+    }
+
+    fn has_output_conflict(&self) -> bool {
+        self.output_family_count() > 1
+    }
+
+    fn requires_raw_text_mode(&self) -> bool {
+        self.has_heading || self.has_replace || self.has_type_list
+    }
+
+    fn preferred_count_kind(&self) -> CountSurfaceKind {
+        if self.has_count_matches {
+            CountSurfaceKind::Matches
+        } else {
+            CountSurfaceKind::MatchedLines
+        }
+    }
+
+    fn default_context_before(&self) -> usize {
+        self.context_before.unwrap_or(0)
+    }
+
+    fn default_context_after(&self) -> usize {
+        self.context_after.unwrap_or(0)
+    }
+
+    fn structured_tokens(&self, mode: ResolvedOutputMode) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let mut index = 0usize;
+        while index < self.tokens.len() {
+            let token = self.tokens[index].as_str();
+            let mut skip_current = false;
+            let mut skip_next = false;
+            match token {
+                "--json"
+                | "-n"
+                | "--line-number"
+                | "-N"
+                | "--no-line-number"
+                | "--heading"
+                | "--no-heading"
+                | "-c"
+                | "--count"
+                | "--count-matches"
+                | "-l"
+                | "--files-with-matches"
+                | "--files-without-match"
+                | "--files" => {
+                    skip_current = true;
+                }
+                "--type-list" | "--replace" => {
+                    skip_current = true;
+                    if token == "--replace" {
+                        skip_next = true;
+                    }
+                }
+                "--color" => {
+                    skip_current = true;
+                    skip_next = true;
+                }
+                "-A" | "-B" | "-C" | "--after-context" | "--before-context" | "--context" => {
+                    if !matches!(mode, ResolvedOutputMode::GroupedContext { .. }) {
+                        skip_current = true;
+                        skip_next = true;
+                    }
+                }
+                _ => {
+                    if token.starts_with("--after-context=")
+                        || token.starts_with("--before-context=")
+                        || token.starts_with("--context=")
+                        || ((token.starts_with("-A")
+                            || token.starts_with("-B")
+                            || token.starts_with("-C"))
+                            && token.len() > 2)
+                    {
+                        if !matches!(mode, ResolvedOutputMode::GroupedContext { .. }) {
+                            skip_current = true;
+                        }
+                    } else if token.starts_with("--color=") {
+                        skip_current = true;
+                    }
+                }
+            }
+            if !skip_current {
+                tokens.push(self.tokens[index].clone());
+            }
+            index += 1;
+            if skip_next && index < self.tokens.len() {
+                index += 1;
+            }
+        }
+        tokens
+    }
+
+    fn raw_tokens(&self, mode: ResolvedOutputMode) -> Vec<String> {
+        let mut tokens = self.tokens.clone();
+        if mode == ResolvedOutputMode::RawJson && !self.has_json {
+            tokens.push("--json".to_string());
+        }
+        tokens
+    }
 }
 
 pub async fn search_text(
     query: &str,
     search_paths: &[PathBuf],
     rg_args_text: &str,
+    query_mode: SearchTextQueryMode,
+    output_mode: SearchTextOutputMode,
     view: SearchTextView,
     display_base_dir: Option<&Path>,
-) -> Result<String, String> {
-    let rg_args = parse_search_text_rg_args(rg_args_text)?;
-    let output = run_search_text_rg(query, search_paths, &rg_args).await?;
-    let (groups, total_matches) = parse_search_text_output(&output, display_base_dir)?;
-    Ok(format_search_text_result(
-        query,
-        &format_scope(search_paths, display_base_dir),
-        rg_args_text,
-        view,
-        &groups,
-        total_matches,
-    ))
+) -> Result<SearchTextResult, String> {
+    let parsed = ParsedRgArgs::parse(rg_args_text)?;
+    let resolved_mode = resolve_output_mode(output_mode, &parsed);
+    if query.trim().is_empty() && !query_can_be_empty(&parsed, resolved_mode) {
+        return Err("query cannot be empty unless rg_args requests a queryless raw rg mode such as `--files` or `--type-list`".to_string());
+    }
+
+    let execution = execute_search(query, search_paths, &parsed, query_mode, resolved_mode).await?;
+    if execution.mode.is_raw() {
+        return Ok(SearchTextResult {
+            content: execution.output,
+            surface_kind: execution.mode.surface_kind(),
+        });
+    }
+
+    let (groups, total_matches) = parse_search_text_output(&execution.output, display_base_dir)?;
+    let content = match execution.mode {
+        ResolvedOutputMode::Grouped => format_grouped_result(
+            query,
+            &format_scope(search_paths, display_base_dir),
+            rg_args_text,
+            view,
+            &groups,
+            total_matches,
+            execution.interpretation,
+        ),
+        ResolvedOutputMode::GroupedContext { before, after } => format_grouped_context_result(
+            query,
+            &format_scope(search_paths, display_base_dir),
+            rg_args_text,
+            view,
+            &groups,
+            total_matches,
+            execution.interpretation,
+            before,
+            after,
+        ),
+        ResolvedOutputMode::Counts(kind) => format_counts_result(
+            query,
+            &format_scope(search_paths, display_base_dir),
+            rg_args_text,
+            &groups,
+            total_matches,
+            execution.interpretation,
+            kind,
+        ),
+        ResolvedOutputMode::Files(kind) => format_files_result(
+            query,
+            &format_scope(search_paths, display_base_dir),
+            rg_args_text,
+            &groups,
+            execution.interpretation,
+            kind,
+        ),
+        ResolvedOutputMode::RawText | ResolvedOutputMode::RawJson => unreachable!(),
+    };
+
+    Ok(SearchTextResult {
+        content,
+        surface_kind: SearchTextSurfaceKind::StructuredText,
+    })
 }
 
-fn parse_search_text_rg_args(rg_args: &str) -> Result<Vec<String>, String> {
-    let trimmed = rg_args.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let parts =
-        shlex::split(trimmed).ok_or_else(|| "rg_args contains invalid quoting".to_string())?;
-    for part in &parts {
-        match part.as_str() {
-            "--json"
-            | "--heading"
-            | "--no-heading"
-            | "--color"
-            | "-n"
-            | "--line-number"
-            | "-N"
-            | "--no-line-number"
-            | "-c"
-            | "--count"
-            | "--count-matches"
-            | "-l"
-            | "--files-with-matches"
-            | "--files-without-match"
-            | "--files"
-            | "--type-list"
-            | "--replace"
-            | "-A"
-            | "-B"
-            | "-C"
-            | "--context"
-            | "--before-context"
-            | "--after-context" => {
-                return Err(format!(
-                    "rg_args cannot use render-shaping flag `{part}` in search_text; use search-behavior flags such as `-F`, `-i`, `-g`, or `-P`, or use raw `rg` in the terminal for unrestricted output shaping"
-                ));
-            }
-            _ => {}
+struct SearchExecution {
+    output: String,
+    interpretation: QueryInterpretation,
+    mode: ResolvedOutputMode,
+}
+
+async fn execute_search(
+    query: &str,
+    search_paths: &[PathBuf],
+    parsed: &ParsedRgArgs,
+    query_mode: SearchTextQueryMode,
+    resolved_mode: ResolvedOutputMode,
+) -> Result<SearchExecution, String> {
+    match query_mode {
+        SearchTextQueryMode::Literal => {
+            let output = run_search_text_rg(query, search_paths, parsed, resolved_mode, true).await?;
+            Ok(SearchExecution {
+                output,
+                interpretation: QueryInterpretation::Literal,
+                mode: resolved_mode,
+            })
         }
+        SearchTextQueryMode::Regex => {
+            let output = run_search_text_rg(query, search_paths, parsed, resolved_mode, false)
+                .await
+                .map_err(|error| map_regex_error(query, error))?;
+            Ok(SearchExecution {
+                output,
+                interpretation: QueryInterpretation::Regex,
+                mode: resolved_mode,
+            })
+        }
+        SearchTextQueryMode::Auto => match run_search_text_rg(
+            query,
+            search_paths,
+            parsed,
+            resolved_mode,
+            false,
+        )
+        .await
+        {
+            Ok(output) => Ok(SearchExecution {
+                output,
+                interpretation: QueryInterpretation::Regex,
+                mode: resolved_mode,
+            }),
+            Err(error)
+                if is_regex_parse_error(&error) && !parsed.explicit_regex_requested && !query.is_empty() =>
+            {
+                let output = run_search_text_rg(query, search_paths, parsed, resolved_mode, true).await?;
+                Ok(SearchExecution {
+                    output,
+                    interpretation: QueryInterpretation::LiteralFallback,
+                    mode: resolved_mode,
+                })
+            }
+            Err(error) => Err(map_regex_error(query, error)),
+        },
     }
-    Ok(parts)
+}
+
+fn resolve_output_mode(
+    requested: SearchTextOutputMode,
+    parsed: &ParsedRgArgs,
+) -> ResolvedOutputMode {
+    if parsed.has_json {
+        return ResolvedOutputMode::RawJson;
+    }
+    if parsed.has_output_conflict() {
+        return ResolvedOutputMode::RawText;
+    }
+    if parsed.requires_raw_text_mode() || parsed.has_files_without_match || parsed.has_files {
+        return ResolvedOutputMode::RawText;
+    }
+
+    match requested {
+        SearchTextOutputMode::Auto => {
+            if parsed.has_count || parsed.has_count_matches {
+                ResolvedOutputMode::Counts(parsed.preferred_count_kind())
+            } else if parsed.has_files_with_matches {
+                ResolvedOutputMode::Files(FilesSurfaceKind::WithMatches)
+            } else if parsed.context_requested() {
+                ResolvedOutputMode::GroupedContext {
+                    before: parsed.default_context_before(),
+                    after: parsed.default_context_after(),
+                }
+            } else {
+                ResolvedOutputMode::Grouped
+            }
+        }
+        SearchTextOutputMode::Grouped => {
+            if parsed.has_count || parsed.has_count_matches || parsed.has_files_with_matches {
+                ResolvedOutputMode::RawText
+            } else if parsed.context_requested() {
+                ResolvedOutputMode::GroupedContext {
+                    before: parsed.default_context_before(),
+                    after: parsed.default_context_after(),
+                }
+            } else {
+                ResolvedOutputMode::Grouped
+            }
+        }
+        SearchTextOutputMode::GroupedContext => {
+            if parsed.has_count || parsed.has_count_matches || parsed.has_files_with_matches {
+                ResolvedOutputMode::RawText
+            } else {
+                ResolvedOutputMode::GroupedContext {
+                    before: parsed.default_context_before(),
+                    after: parsed.default_context_after(),
+                }
+            }
+        }
+        SearchTextOutputMode::Counts => {
+            if parsed.has_files_with_matches {
+                ResolvedOutputMode::RawText
+            } else {
+                ResolvedOutputMode::Counts(parsed.preferred_count_kind())
+            }
+        }
+        SearchTextOutputMode::Files => {
+            if parsed.has_count || parsed.has_count_matches {
+                ResolvedOutputMode::RawText
+            } else {
+                ResolvedOutputMode::Files(FilesSurfaceKind::WithMatches)
+            }
+        }
+        SearchTextOutputMode::RawText => ResolvedOutputMode::RawText,
+        SearchTextOutputMode::RawJson => ResolvedOutputMode::RawJson,
+    }
+}
+
+fn query_can_be_empty(parsed: &ParsedRgArgs, mode: ResolvedOutputMode) -> bool {
+    mode.is_raw() && parsed.queryless_hint
 }
 
 async fn run_search_text_rg(
     query: &str,
     search_paths: &[PathBuf],
-    rg_args: &[String],
+    parsed: &ParsedRgArgs,
+    mode: ResolvedOutputMode,
+    literal_query: bool,
 ) -> Result<String, String> {
     let mut command = tokio::process::Command::new("rg");
-    command
-        .arg("--json")
-        .arg("--line-number")
-        .arg("--color")
-        .arg("never")
-        .arg("--no-heading");
-    for arg in rg_args {
-        command.arg(arg);
+    if mode.is_raw() {
+        for arg in parsed.raw_tokens(mode) {
+            command.arg(arg);
+        }
+    } else {
+        command
+            .arg("--json")
+            .arg("--line-number")
+            .arg("--color")
+            .arg("never")
+            .arg("--no-heading");
+        for arg in parsed.structured_tokens(mode) {
+            command.arg(arg);
+        }
     }
-    command.arg("--").arg(query);
+
+    if literal_query {
+        command.arg("-F");
+    }
+    if !query.is_empty() {
+        command.arg("--").arg(query);
+    }
     for search_path in search_paths {
         command.arg(search_path);
     }
+
     let output = command
         .output()
         .await
@@ -135,20 +649,21 @@ fn parse_search_text_output(
         }
         let value: Value = serde_json::from_str(raw_line)
             .map_err(|err| format!("Failed to parse rg JSON output: {err}"))?;
-        if value.get("type").and_then(Value::as_str) != Some("match") {
+        let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        if event_type != "match" && event_type != "context" {
             continue;
         }
         let data = value
             .get("data")
-            .ok_or_else(|| "rg JSON output missing `data` for a match event".to_string())?;
+            .ok_or_else(|| format!("rg JSON output missing `data` for a {event_type} event"))?;
         let raw_path = extract_rg_text(data.get("path"))
-            .ok_or_else(|| "rg JSON output missing match path".to_string())?;
+            .ok_or_else(|| "rg JSON output missing event path".to_string())?;
         let line_text = extract_rg_text(data.get("lines"))
-            .ok_or_else(|| "rg JSON output missing match lines".to_string())?;
+            .ok_or_else(|| "rg JSON output missing event lines".to_string())?;
         let line_number = data
             .get("line_number")
             .and_then(Value::as_u64)
-            .ok_or_else(|| "rg JSON output missing match line_number".to_string())?
+            .ok_or_else(|| "rg JSON output missing event line_number".to_string())?
             as usize;
         let display_path = display_path(display_base_dir, Path::new(&raw_path));
         let index = if let Some(index) = group_index_by_path.get(&display_path).copied() {
@@ -157,31 +672,38 @@ fn parse_search_text_output(
             let index = groups.len();
             groups.push(SearchTextGroup {
                 path: display_path.clone(),
-                matches: Vec::new(),
+                entries: Vec::new(),
+                matched_lines: 0,
                 total_hits: 0,
             });
             group_index_by_path.insert(display_path, index);
             index
         };
-        let hit_count = data
-            .get("submatches")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .filter(|count| *count > 0)
-            .unwrap_or(1);
-        groups[index].matches.push(SearchTextMatch {
+        let (kind, hit_count) = if event_type == "match" {
+            let hit_count = data
+                .get("submatches")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .filter(|count| *count > 0)
+                .unwrap_or(1);
+            groups[index].matched_lines += 1;
+            groups[index].total_hits += hit_count;
+            total_matches += hit_count;
+            (SearchTextEntryKind::Match, hit_count)
+        } else {
+            (SearchTextEntryKind::Context, 0)
+        };
+        groups[index].entries.push(SearchTextEntry {
             line_number,
             text: trim_rg_line_text(&line_text),
+            kind,
             hit_count,
         });
-        groups[index].total_hits += hit_count;
-        total_matches += hit_count;
     }
 
     groups.sort_by(|lhs, rhs| {
-        rhs.matches
-            .len()
-            .cmp(&lhs.matches.len())
+        rhs.matched_lines
+            .cmp(&lhs.matched_lines)
             .then_with(|| rhs.total_hits.cmp(&lhs.total_hits))
             .then_with(|| lhs.path.cmp(&rhs.path))
     });
@@ -203,40 +725,94 @@ fn trim_rg_line_text(text: &str) -> String {
     text.trim_end_matches(&['\r', '\n'][..]).to_string()
 }
 
-fn format_search_text_result(
+fn format_grouped_result(
     query: &str,
     scope: &str,
     rg_args: &str,
     view: SearchTextView,
     groups: &[SearchTextGroup],
     total_matches: usize,
+    interpretation: QueryInterpretation,
 ) -> String {
-    let matched_lines = groups
-        .iter()
-        .map(|group| group.matches.len())
-        .sum::<usize>();
-    let mut lines = vec![
-        format!("search_text[{}]:", view.label()),
-        format!("query: {query}"),
-        format!("scope: {scope}"),
-        format!("files: {}", groups.len()),
-        format!("matched_lines: {matched_lines}"),
-        format!("matches: {total_matches}"),
-    ];
+    format_grouped_like_result(
+        ResolvedOutputMode::Grouped,
+        query,
+        scope,
+        rg_args,
+        view,
+        groups,
+        total_matches,
+        interpretation,
+        None,
+    )
+}
+
+fn format_grouped_context_result(
+    query: &str,
+    scope: &str,
+    rg_args: &str,
+    view: SearchTextView,
+    groups: &[SearchTextGroup],
+    total_matches: usize,
+    interpretation: QueryInterpretation,
+    before: usize,
+    after: usize,
+) -> String {
+    format_grouped_like_result(
+        ResolvedOutputMode::GroupedContext { before, after },
+        query,
+        scope,
+        rg_args,
+        view,
+        groups,
+        total_matches,
+        interpretation,
+        Some((before, after)),
+    )
+}
+
+fn format_grouped_like_result(
+    mode: ResolvedOutputMode,
+    query: &str,
+    scope: &str,
+    rg_args: &str,
+    view: SearchTextView,
+    groups: &[SearchTextGroup],
+    total_matches: usize,
+    interpretation: QueryInterpretation,
+    context_window: Option<(usize, usize)>,
+) -> String {
+    let matched_lines = groups.iter().map(|group| group.matched_lines).sum::<usize>();
+    let mut lines = vec![format!("search_text[{}]:", mode.label(view))];
+    if !query.is_empty() {
+        lines.push(format!("query: {query}"));
+    }
+    lines.push(format!("scope: {scope}"));
+    lines.push(format!("files: {}", groups.len()));
+    lines.push(format!("matched_lines: {matched_lines}"));
+    lines.push(format!("matches: {total_matches}"));
+    if let Some((before, after)) = context_window {
+        lines.push(format!("context: before={before} after={after}"));
+    }
+    if let Some(label) = interpretation_label(interpretation) {
+        lines.push(format!("query_interpretation: {label}"));
+    }
     if !rg_args.trim().is_empty() {
         lines.push(format!("rg_args: {}", rg_args.trim()));
     }
+
+    let per_file_limit = match mode {
+        ResolvedOutputMode::Grouped => SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE,
+        ResolvedOutputMode::GroupedContext { .. } => SEARCH_TEXT_PREVIEW_MAX_CONTEXT_LINES_PER_FILE,
+        _ => 0,
+    };
+
     if view == SearchTextView::Preview {
         let rendered_files = groups.len().min(SEARCH_TEXT_PREVIEW_MAX_FILES);
         let rendered_lines = groups
             .iter()
             .take(rendered_files)
-            .map(|group| {
-                group
-                    .matches
-                    .len()
-                    .min(SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE)
-            })
+            .map(|group| group.entries.len().min(per_file_limit))
             .sum::<usize>();
         lines.push(format!("rendered_files: {rendered_files}"));
         lines.push(format!("rendered_lines: {rendered_lines}"));
@@ -248,41 +824,32 @@ fn format_search_text_result(
     }
 
     lines.push(String::new());
-    let rendered_files = match view {
-        SearchTextView::Preview => groups.len().min(SEARCH_TEXT_PREVIEW_MAX_FILES),
-        SearchTextView::Full => groups.len(),
+    let rendered_files = if view == SearchTextView::Preview {
+        groups.len().min(SEARCH_TEXT_PREVIEW_MAX_FILES)
+    } else {
+        groups.len()
     };
-    let mut rendered_lines_total = 0usize;
+    let mut rendered_entries_total = 0usize;
+
     for (index, group) in groups.iter().take(rendered_files).enumerate() {
         if index > 0 {
             lines.push(String::new());
         }
-        let line_word = if group.matches.len() == 1 {
-            "line"
-        } else {
-            "lines"
-        };
-        let hit_word = if group.total_hits == 1 {
-            "match"
-        } else {
-            "matches"
-        };
+        let line_word = if group.matched_lines == 1 { "line" } else { "lines" };
+        let hit_word = if group.total_hits == 1 { "match" } else { "matches" };
         lines.push(format!(
             "[{}] {} ({} {}, {} {})",
             index + 1,
             group.path,
-            group.matches.len(),
+            group.matched_lines,
             line_word,
             group.total_hits,
             hit_word
         ));
-        let rendered_entries = match view {
-            SearchTextView::Preview => group
-                .matches
-                .iter()
-                .take(SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE)
-                .collect::<Vec<_>>(),
-            SearchTextView::Full => group.matches.iter().collect::<Vec<_>>(),
+        let rendered_entries = if view == SearchTextView::Preview {
+            group.entries.iter().take(per_file_limit).collect::<Vec<_>>()
+        } else {
+            group.entries.iter().collect::<Vec<_>>()
         };
         let line_number_width = rendered_entries
             .iter()
@@ -292,37 +859,25 @@ fn format_search_text_result(
             .to_string()
             .len()
             .max(1);
-        rendered_lines_total += rendered_entries.len();
+        rendered_entries_total += rendered_entries.len();
         for entry in rendered_entries {
-            let line_number = entry.line_number;
-            if entry.hit_count > 1 {
-                lines.push(format!(
-                    "  {line_number:>width$} | {}  [{} hits]",
-                    entry.text,
-                    entry.hit_count,
-                    width = line_number_width,
-                ));
-            } else {
-                lines.push(format!(
-                    "  {line_number:>width$} | {}",
-                    entry.text,
-                    width = line_number_width
-                ));
-            }
+            render_group_entry(&mut lines, entry, line_number_width, matches!(mode, ResolvedOutputMode::GroupedContext { .. }));
         }
-        if view == SearchTextView::Preview
-            && group.matches.len() > SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE
-        {
+        if view == SearchTextView::Preview && group.entries.len() > per_file_limit {
             lines.push(format!(
-                "  note: {} more matched lines in this file",
-                group.matches.len() - SEARCH_TEXT_PREVIEW_MAX_LINES_PER_FILE
+                "  note: {} more rendered lines in this file",
+                group.entries.len() - per_file_limit
             ));
         }
     }
 
     if view == SearchTextView::Preview {
         let omitted_files = groups.len().saturating_sub(rendered_files);
-        let omitted_lines = matched_lines.saturating_sub(rendered_lines_total);
+        let omitted_lines = groups
+            .iter()
+            .map(|group| group.entries.len())
+            .sum::<usize>()
+            .saturating_sub(rendered_entries_total);
         if omitted_files > 0 || omitted_lines > 0 {
             lines.push(String::new());
             lines.push("omitted:".to_string());
@@ -330,12 +885,138 @@ fn format_search_text_result(
                 lines.push(format!("- {omitted_files} more files not shown"));
             }
             if omitted_lines > 0 {
-                lines.push(format!("- {omitted_lines} more matched lines not shown"));
+                lines.push(format!("- {omitted_lines} more rendered lines not shown"));
             }
         }
     }
 
     lines.join("\n")
+}
+
+fn render_group_entry(
+    lines: &mut Vec<String>,
+    entry: &SearchTextEntry,
+    width: usize,
+    render_context_marker: bool,
+) {
+    let line_number = entry.line_number;
+    let prefix = if render_context_marker {
+        match entry.kind {
+            SearchTextEntryKind::Match => "M",
+            SearchTextEntryKind::Context => "C",
+        }
+    } else {
+        ""
+    };
+    let line_prefix = if render_context_marker {
+        format!("  {prefix} {line_number:>width$} | ", width = width)
+    } else {
+        format!("  {line_number:>width$} | ", width = width)
+    };
+    if entry.hit_count > 1 {
+        lines.push(format!("{line_prefix}{}  [{} hits]", entry.text, entry.hit_count));
+    } else {
+        lines.push(format!("{line_prefix}{}", entry.text));
+    }
+}
+
+fn format_counts_result(
+    query: &str,
+    scope: &str,
+    rg_args: &str,
+    groups: &[SearchTextGroup],
+    total_matches: usize,
+    interpretation: QueryInterpretation,
+    count_kind: CountSurfaceKind,
+) -> String {
+    let matched_lines = groups.iter().map(|group| group.matched_lines).sum::<usize>();
+    let mut lines = vec!["search_text[counts]:".to_string()];
+    if !query.is_empty() {
+        lines.push(format!("query: {query}"));
+    }
+    lines.push(format!("scope: {scope}"));
+    lines.push(format!("files: {}", groups.len()));
+    lines.push(format!("matched_lines: {matched_lines}"));
+    lines.push(format!("matches: {total_matches}"));
+    lines.push(format!(
+        "count_mode: {}",
+        match count_kind {
+            CountSurfaceKind::MatchedLines => "matched_lines",
+            CountSurfaceKind::Matches => "matches",
+        }
+    ));
+    if let Some(label) = interpretation_label(interpretation) {
+        lines.push(format!("query_interpretation: {label}"));
+    }
+    if !rg_args.trim().is_empty() {
+        lines.push(format!("rg_args: {}", rg_args.trim()));
+    }
+    lines.push(String::new());
+    if groups.is_empty() {
+        lines.push("(no matches)".to_string());
+        return lines.join("\n");
+    }
+    for (index, group) in groups.iter().enumerate() {
+        let value = match count_kind {
+            CountSurfaceKind::MatchedLines => group.matched_lines,
+            CountSurfaceKind::Matches => group.total_hits,
+        };
+        let unit = match count_kind {
+            CountSurfaceKind::MatchedLines => {
+                if value == 1 { "matched line" } else { "matched lines" }
+            }
+            CountSurfaceKind::Matches => {
+                if value == 1 { "match" } else { "matches" }
+            }
+        };
+        lines.push(format!("[{}] {} | {} {}", index + 1, group.path, value, unit));
+    }
+    lines.join("\n")
+}
+
+fn format_files_result(
+    query: &str,
+    scope: &str,
+    rg_args: &str,
+    groups: &[SearchTextGroup],
+    interpretation: QueryInterpretation,
+    file_kind: FilesSurfaceKind,
+) -> String {
+    let mut lines = vec!["search_text[files]:".to_string()];
+    if !query.is_empty() {
+        lines.push(format!("query: {query}"));
+    }
+    lines.push(format!("scope: {scope}"));
+    lines.push(format!("files: {}", groups.len()));
+    lines.push(format!(
+        "mode: {}",
+        match file_kind {
+            FilesSurfaceKind::WithMatches => "files_with_matches",
+        }
+    ));
+    if let Some(label) = interpretation_label(interpretation) {
+        lines.push(format!("query_interpretation: {label}"));
+    }
+    if !rg_args.trim().is_empty() {
+        lines.push(format!("rg_args: {}", rg_args.trim()));
+    }
+    lines.push(String::new());
+    if groups.is_empty() {
+        lines.push("(no matches)".to_string());
+        return lines.join("\n");
+    }
+    for (index, group) in groups.iter().enumerate() {
+        lines.push(format!("[{}] {}", index + 1, group.path));
+    }
+    lines.join("\n")
+}
+
+fn interpretation_label(interpretation: QueryInterpretation) -> Option<&'static str> {
+    match interpretation {
+        QueryInterpretation::Regex => None,
+        QueryInterpretation::Literal => Some("literal"),
+        QueryInterpretation::LiteralFallback => Some("literal_fallback"),
+    }
 }
 
 impl SearchTextView {
@@ -347,103 +1028,196 @@ impl SearchTextView {
     }
 }
 
+fn is_regex_parse_error(error: &str) -> bool {
+    error.contains("regex parse error") || error.contains("the literal \"\\n\" is not allowed in a regex")
+}
+
+fn map_regex_error(query: &str, error: String) -> String {
+    if is_regex_parse_error(&error) {
+        format!(
+            "query was interpreted as a ripgrep regex and failed to parse. If you meant to search the literal text `{query}`, retry with `query_mode: \"literal\"` or leave `query_mode` at `auto`. Raw rg error: {error}"
+        )
+    } else {
+        error
+    }
+}
+
+fn parse_following_usize(tokens: &[String], index: usize) -> usize {
+    tokens
+        .get(index + 1)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn parse_inline_usize(token: &str) -> usize {
+    token
+        .split_once('=')
+        .and_then(|(_, value)| value.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+fn parse_short_inline_usize(token: &str) -> usize {
+    token[2..].parse::<usize>().ok().unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn output_mode_auto_prefers_grouped_context_for_context_flags() {
+        let parsed = ParsedRgArgs::parse("-C2 -g '*.rs'").expect("parse rg args");
+        assert_eq!(
+            resolve_output_mode(SearchTextOutputMode::Auto, &parsed),
+            ResolvedOutputMode::GroupedContext {
+                before: 2,
+                after: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn output_mode_auto_prefers_counts_for_count_matches() {
+        let parsed = ParsedRgArgs::parse("--count-matches").expect("parse rg args");
+        assert_eq!(
+            resolve_output_mode(SearchTextOutputMode::Auto, &parsed),
+            ResolvedOutputMode::Counts(CountSurfaceKind::Matches)
+        );
+    }
+
+    #[test]
+    fn output_mode_auto_falls_back_to_raw_text_on_conflicts() {
+        let parsed = ParsedRgArgs::parse("-C2 --count").expect("parse rg args");
+        assert_eq!(
+            resolve_output_mode(SearchTextOutputMode::Auto, &parsed),
+            ResolvedOutputMode::RawText
+        );
+    }
+
+    #[test]
+    fn parses_compact_context_flags() {
+        let parsed = ParsedRgArgs::parse("-C2 --before-context=3").expect("parse rg args");
+        assert_eq!(parsed.context_before, Some(3));
+        assert_eq!(parsed.context_after, Some(2));
+    }
+
+    #[test]
     fn preview_renders_explicit_omission_accounting() {
         let groups = vec![SearchTextGroup {
             path: "src/noisy.txt".to_string(),
-            matches: (1..=5)
-                .map(|line_number| SearchTextMatch {
+            entries: (1..=5)
+                .map(|line_number| SearchTextEntry {
                     line_number,
                     text: "alpha".to_string(),
+                    kind: SearchTextEntryKind::Match,
                     hit_count: 1,
                 })
                 .collect(),
+            matched_lines: 5,
             total_hits: 5,
         }];
-        let rendered =
-            format_search_text_result("alpha", "src", "", SearchTextView::Preview, &groups, 5);
+        let rendered = format_grouped_result(
+            "alpha",
+            "src",
+            "",
+            SearchTextView::Preview,
+            &groups,
+            5,
+            QueryInterpretation::Regex,
+        );
         assert!(rendered.contains("rendered_files: 1"));
         assert!(rendered.contains("rendered_lines: 3"));
-        assert!(rendered.contains("note: 2 more matched lines in this file"));
-        assert!(rendered.contains("- 2 more matched lines not shown"));
+        assert!(rendered.contains("note: 2 more rendered lines in this file"));
+        assert!(rendered.contains("- 2 more rendered lines not shown"));
     }
 
     #[test]
-    fn aligns_line_numbers_within_each_file_group() {
-        let groups = vec![
-            SearchTextGroup {
-                path: "src/one.txt".to_string(),
-                matches: vec![
-                    SearchTextMatch {
-                        line_number: 9,
-                        text: "alpha".to_string(),
-                        hit_count: 1,
-                    },
-                    SearchTextMatch {
-                        line_number: 10,
-                        text: "beta".to_string(),
-                        hit_count: 1,
-                    },
-                ],
-                total_hits: 2,
-            },
-            SearchTextGroup {
-                path: "src/two.txt".to_string(),
-                matches: vec![SearchTextMatch {
-                    line_number: 100,
-                    text: "gamma".to_string(),
-                    hit_count: 1,
-                }],
-                total_hits: 1,
-            },
-        ];
-
-        let rendered = format_search_text_result("a", "src", "", SearchTextView::Full, &groups, 3);
-        assert!(rendered.contains("   9 | alpha"));
-        assert!(rendered.contains("  10 | beta"));
-        assert!(!rendered.contains("    9 | alpha"));
-    }
-
-    #[test]
-    fn preview_alignment_is_based_on_rendered_entries_only() {
+    fn grouped_context_marks_match_and_context_lines() {
         let groups = vec![SearchTextGroup {
             path: "src/noisy.txt".to_string(),
-            matches: vec![
-                SearchTextMatch {
+            entries: vec![
+                SearchTextEntry {
                     line_number: 9,
                     text: "alpha".to_string(),
+                    kind: SearchTextEntryKind::Match,
                     hit_count: 1,
                 },
-                SearchTextMatch {
+                SearchTextEntry {
                     line_number: 10,
-                    text: "alpha".to_string(),
-                    hit_count: 1,
-                },
-                SearchTextMatch {
-                    line_number: 11,
-                    text: "alpha".to_string(),
-                    hit_count: 1,
-                },
-                SearchTextMatch {
-                    line_number: 100,
-                    text: "alpha".to_string(),
-                    hit_count: 1,
+                    text: "beta".to_string(),
+                    kind: SearchTextEntryKind::Context,
+                    hit_count: 0,
                 },
             ],
-            total_hits: 4,
+            matched_lines: 1,
+            total_hits: 1,
         }];
+        let rendered = format_grouped_context_result(
+            "alpha",
+            "src",
+            "-C1",
+            SearchTextView::Full,
+            &groups,
+            1,
+            QueryInterpretation::LiteralFallback,
+            1,
+            1,
+        );
+        assert!(rendered.contains("search_text[grouped_context]:"));
+        assert!(rendered.contains("query_interpretation: literal_fallback"));
+        assert!(rendered.contains("M  9 | alpha") || rendered.contains("M   9 | alpha"));
+        assert!(rendered.contains("C 10 | beta") || rendered.contains("C  10 | beta"));
+    }
 
-        let rendered =
-            format_search_text_result("alpha", "src", "", SearchTextView::Preview, &groups, 4);
-        assert!(rendered.contains("rendered_lines: 3"));
-        assert!(rendered.contains("   9 | alpha"));
-        assert!(rendered.contains("  10 | alpha"));
-        assert!(rendered.contains("  11 | alpha"));
-        assert!(!rendered.contains("100 | alpha"));
-        assert!(!rendered.contains("    9 | alpha"));
+    #[test]
+    fn files_surface_is_compact() {
+        let groups = vec![SearchTextGroup {
+            path: "src/one.txt".to_string(),
+            entries: vec![SearchTextEntry {
+                line_number: 1,
+                text: "alpha".to_string(),
+                kind: SearchTextEntryKind::Match,
+                hit_count: 1,
+            }],
+            matched_lines: 1,
+            total_hits: 1,
+        }];
+        let rendered = format_files_result(
+            "alpha",
+            "src",
+            "-l",
+            &groups,
+            QueryInterpretation::Regex,
+            FilesSurfaceKind::WithMatches,
+        );
+        assert!(rendered.contains("search_text[files]:"));
+        assert!(rendered.contains("mode: files_with_matches"));
+        assert!(rendered.contains("[1] src/one.txt"));
+    }
+
+    #[test]
+    fn counts_surface_can_render_matches() {
+        let groups = vec![SearchTextGroup {
+            path: "src/one.txt".to_string(),
+            entries: vec![SearchTextEntry {
+                line_number: 1,
+                text: "alpha alpha".to_string(),
+                kind: SearchTextEntryKind::Match,
+                hit_count: 2,
+            }],
+            matched_lines: 1,
+            total_hits: 2,
+        }];
+        let rendered = format_counts_result(
+            "alpha",
+            "src",
+            "--count-matches",
+            &groups,
+            2,
+            QueryInterpretation::Regex,
+            CountSurfaceKind::Matches,
+        );
+        assert!(rendered.contains("count_mode: matches"));
+        assert!(rendered.contains("[1] src/one.txt | 2 matches"));
     }
 }

@@ -616,6 +616,22 @@ fn make_search_fixture(temp: &TempDir) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn make_search_blackbox_fixture(temp: &TempDir) -> anyhow::Result<()> {
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::create_dir_all(temp.path().join("docs"))?;
+    std::fs::write(
+        temp.path().join("src").join("one.txt"),
+        "alpha\nbeta\nwarning[\n{ref:alpha}\nalpha alpha\nline.with.dots\n",
+    )?;
+    std::fs::write(
+        temp.path().join("src").join("two.txt"),
+        "before context\nalpha\nafter context\n",
+    )?;
+    std::fs::write(temp.path().join("src").join("three.txt"), "no hits here\n")?;
+    std::fs::write(temp.path().join("docs").join("guide.md"), "{ref:doc}\nwarning[\n")?;
+    Ok(())
+}
+
 fn make_read_fixture(temp: &TempDir) -> anyhow::Result<()> {
     std::fs::write(
         temp.path().join("notes.txt"),
@@ -673,6 +689,94 @@ async fn cli_search_full_matches_mcp_output() -> anyhow::Result<()> {
     )?;
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_search_auto_literal_fallback_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    make_search_blackbox_fixture(&server_temp)?;
+    make_search_blackbox_fixture(&cli_temp)?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "{ref:",
+            "path": ".",
+            "view": "preview"
+        }),
+    )
+    .await?;
+
+    let cli_output = run_cli(cli_temp.path(), &["search", "{ref:", ".", "--view", "preview"], None)?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stdout).contains("query_interpretation: literal_fallback"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_search_counts_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    make_search_blackbox_fixture(&server_temp)?;
+    make_search_blackbox_fixture(&cli_temp)?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "alpha",
+            "path": ".",
+            "rg_args": "--count-matches"
+        }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["search", "alpha", ".", "--rg-args", "--count-matches"],
+        None,
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stdout).contains("search_text[counts]:"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_search_queryless_files_raw_text_matches_mcp_output() -> anyhow::Result<()> {
+    let server_temp = tempfile::tempdir()?;
+    let cli_temp = tempfile::tempdir()?;
+    make_search_blackbox_fixture(&server_temp)?;
+    make_search_blackbox_fixture(&cli_temp)?;
+
+    let server_output = call_server_tool(
+        server_temp.path(),
+        "search_text",
+        json!({
+            "query": "",
+            "path": ".",
+            "rg_args": "--files",
+            "output_mode": "raw_text"
+        }),
+    )
+    .await?;
+
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["search", "", ".", "--rg-args", "--files", "--output-mode", "raw_text"],
+        None,
+    )?;
+    assert!(cli_output.status.success());
+    assert_eq!(utf8(&cli_output.stdout), server_output);
+    assert!(utf8(&cli_output.stdout).contains("src/one.txt"));
+    assert!(!utf8(&cli_output.stdout).contains(cli_temp.path().to_string_lossy().as_ref()));
     assert!(utf8(&cli_output.stderr).is_empty());
     Ok(())
 }

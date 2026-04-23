@@ -5,8 +5,9 @@ use crate::tool_service::{ToolService, render_read_surface_content, render_searc
 use crate::transport_shell::TransportSourceProvenance;
 use anyhow::Result;
 use docutouch_core::{
-    DirectoryListOptions, ReadFileLineRange, ReadFileOptions, SearchTextView, TimestampField,
-    list_directory, normalize_sampled_view_options, parse_read_file_line_range_text,
+    DirectoryListOptions, ReadFileLineRange, ReadFileOptions, SearchTextOutputMode,
+    SearchTextQueryMode, SearchTextView, TimestampField, list_directory,
+    normalize_sampled_view_options, parse_read_file_line_range_text,
 };
 use serde_json::json;
 use std::ffi::OsString;
@@ -49,6 +50,8 @@ struct SearchCommand {
     query: String,
     paths: Vec<String>,
     rg_args: String,
+    query_mode: SearchTextQueryMode,
+    output_mode: SearchTextOutputMode,
     view: SearchTextView,
 }
 
@@ -291,6 +294,8 @@ fn parse_read_command(args: &[String]) -> Result<ReadCommand, String> {
 fn parse_search_command(args: &[String]) -> Result<SearchCommand, String> {
     let mut positionals = Vec::new();
     let mut rg_args = String::new();
+    let mut query_mode = SearchTextQueryMode::Auto;
+    let mut output_mode = SearchTextOutputMode::Auto;
     let mut view = SearchTextView::Preview;
     let mut index = 0usize;
     while index < args.len() {
@@ -300,6 +305,16 @@ fn parse_search_command(args: &[String]) -> Result<SearchCommand, String> {
         } else if arg == "--rg-args" {
             index += 1;
             rg_args = value_at(args, index, "--rg-args")?.to_string();
+        } else if let Some(value) = arg.strip_prefix("--query-mode=") {
+            query_mode = parse_search_query_mode(value)?;
+        } else if arg == "--query-mode" {
+            index += 1;
+            query_mode = parse_search_query_mode(value_at(args, index, "--query-mode")?)?;
+        } else if let Some(value) = arg.strip_prefix("--output-mode=") {
+            output_mode = parse_search_output_mode(value)?;
+        } else if arg == "--output-mode" {
+            index += 1;
+            output_mode = parse_search_output_mode(value_at(args, index, "--output-mode")?)?;
         } else if let Some(value) = arg.strip_prefix("--view=") {
             view = parse_search_view(value)?;
         } else if arg == "--view" {
@@ -322,6 +337,8 @@ fn parse_search_command(args: &[String]) -> Result<SearchCommand, String> {
         query: positionals[0].clone(),
         paths: positionals[1..].to_vec(),
         rg_args,
+        query_mode,
+        output_mode,
         view,
     })
 }
@@ -471,14 +488,13 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
 }
 
 async fn run_search(command: SearchCommand) -> Result<i32> {
-    if command.query.trim().is_empty() {
-        return emit_result(Err(std::io::Error::other("query cannot be empty")));
-    }
     let cwd = std::env::current_dir()?;
     let result = render_search_surface(
         &command.query,
         &command.paths,
         &command.rg_args,
+        command.query_mode,
+        command.output_mode,
         command.view,
         Some(cwd.as_path()),
         Some(cwd.as_path()),
@@ -667,6 +683,32 @@ fn parse_search_view(value: &str) -> Result<SearchTextView, String> {
     }
 }
 
+fn parse_search_query_mode(value: &str) -> Result<SearchTextQueryMode, String> {
+    match value {
+        "auto" => Ok(SearchTextQueryMode::Auto),
+        "literal" => Ok(SearchTextQueryMode::Literal),
+        "regex" => Ok(SearchTextQueryMode::Regex),
+        _ => Err(format!(
+            "--query-mode must be `auto`, `literal`, or `regex`, got `{value}`"
+        )),
+    }
+}
+
+fn parse_search_output_mode(value: &str) -> Result<SearchTextOutputMode, String> {
+    match value {
+        "auto" => Ok(SearchTextOutputMode::Auto),
+        "grouped" => Ok(SearchTextOutputMode::Grouped),
+        "grouped_context" => Ok(SearchTextOutputMode::GroupedContext),
+        "counts" => Ok(SearchTextOutputMode::Counts),
+        "files" => Ok(SearchTextOutputMode::Files),
+        "raw_text" => Ok(SearchTextOutputMode::RawText),
+        "raw_json" => Ok(SearchTextOutputMode::RawJson),
+        _ => Err(format!(
+            "--output-mode must be `auto`, `grouped`, `grouped_context`, `counts`, `files`, `raw_text`, or `raw_json`, got `{value}`"
+        )),
+    }
+}
+
 fn parse_wait_mode(value: &str) -> Result<String, String> {
     match value {
         "any" | "all" => Ok(value.to_string()),
@@ -705,7 +747,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` preserves the MCP `search_text` contract, including grouped preview/full views.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--query-mode auto|literal|regex] [--output-mode auto|grouped|grouped_context|counts|files|raw_text|raw_json] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` is the smart single-entry ripgrep surface: `query_mode auto` will fallback to literal on regex parse errors, and `output_mode auto` will infer grouped/counts/files/raw outputs from `rg_args`.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 

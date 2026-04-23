@@ -886,9 +886,9 @@ async fn server_search_text_preview_accounts_for_omission() -> anyhow::Result<()
         assert!(text.contains("rendered_files: 1"));
         assert!(text.contains("rendered_lines: 3"));
         assert!(text.contains("[1] src/noisy.txt (5 lines, 5 matches)"));
-        assert!(text.contains("  note: 2 more matched lines in this file"));
+        assert!(text.contains("  note: 2 more rendered lines in this file"));
         assert!(text.contains("omitted:"));
-        assert!(text.contains("- 2 more matched lines not shown"));
+        assert!(text.contains("- 2 more rendered lines not shown"));
         assert!(!text.contains("  4 | alpha"));
         assert!(!text.contains("  5 | alpha"));
 
@@ -983,7 +983,7 @@ async fn server_search_text_accepts_path_arrays() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn server_search_text_rejects_render_shaping_line_number_flag() -> anyhow::Result<()> {
+async fn server_search_text_absorbs_redundant_line_number_flag() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::create_dir_all(temp.path().join("src"))?;
     std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
@@ -997,7 +997,7 @@ async fn server_search_text_rejects_render_shaping_line_number_flag() -> anyhow:
             })
             .await?;
 
-        let err = client
+        let result = client
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "search_text".into(),
@@ -1008,16 +1008,91 @@ async fn server_search_text_rejects_render_shaping_line_number_flag() -> anyhow:
                 }))),
                 task: None,
             })
-            .await
-            .expect_err("line-number flags should be rejected");
-        assert!(err.to_string().contains("render-shaping flag `-n`"));
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[preview]:"));
+        assert!(text.contains("rg_args: -n"));
+        assert!(text.contains("[1] src/one.txt (1 line, 1 match)"));
+        assert!(text.contains("  1 | alpha"));
 
         Ok(())
     })
 }
 
 #[tokio::test]
-async fn server_search_text_rejects_render_shaping_context_flag() -> anyhow::Result<()> {
+async fn server_search_text_infers_grouped_context_for_context_flag() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "before\nalpha\nafter\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": "src",
+                    "rg_args": "-C 2"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("search_text[grouped_context]:"));
+        assert!(text.contains("context: before=2 after=2"));
+        assert!(text.contains("M 2 | alpha") || text.contains("M  2 | alpha"));
+        assert!(text.contains("C 1 | before") || text.contains("C  1 | before"));
+        assert!(text.contains("C 3 | after") || text.contains("C  3 | after"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_auto_falls_back_to_literal_for_invalid_regex() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "{ref:alpha}\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "{ref:",
+                    "path": "src"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("query_interpretation: literal_fallback"));
+        assert!(text.contains("  1 | {ref:alpha}"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_returns_raw_json_when_requested_by_rg_args() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::create_dir_all(temp.path().join("src"))?;
     std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
@@ -1031,20 +1106,24 @@ async fn server_search_text_rejects_render_shaping_context_flag() -> anyhow::Res
             })
             .await?;
 
-        let err = client
+        let result = client
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "search_text".into(),
                 arguments: Some(json_object(json!({
                     "query": "alpha",
                     "path": "src",
-                    "rg_args": "-C 2"
+                    "rg_args": "--json"
                 }))),
                 task: None,
             })
-            .await
-            .expect_err("context flags should be rejected");
-        assert!(err.to_string().contains("render-shaping flag `-C`"));
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.starts_with('{'));
+        assert!(!text.contains("search_text["));
+        assert!(text.contains("\"type\":\"match\""));
+        assert!(text.contains("one.txt"));
+        assert!(!text.contains(temp.path().to_string_lossy().as_ref()));
 
         Ok(())
     })

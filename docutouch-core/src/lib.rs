@@ -36,7 +36,10 @@ pub use rewrite_runtime::{
     RewriteRuntimeOutcome, RewriteWarning, RewriteWorkspaceRequirement, apply_rewrite_program,
     rewrite_workspace_requirement,
 };
-pub use search_text::{SearchTextView, search_text};
+pub use search_text::{
+    SearchTextOutputMode, SearchTextQueryMode, SearchTextResult, SearchTextSurfaceKind,
+    SearchTextView, search_text,
+};
 pub use splice_presentation::{SplicePresentationContext, format_splice_result};
 pub use splice_program::{
     SpliceAction, SpliceProgram, SpliceProgramParseError, TargetAction, TransferSourceKind,

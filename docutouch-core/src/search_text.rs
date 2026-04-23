@@ -211,17 +211,22 @@ impl ParsedRgArgs {
                     index += 1;
                 }
                 "-A" | "--after-context" => {
-                    parsed.context_after = Some(parse_following_usize(&parsed.tokens, index));
+                    if let Some(value) = parse_following_usize(&parsed.tokens, index) {
+                        parsed.context_after = Some(value);
+                    }
                     index += 1;
                 }
                 "-B" | "--before-context" => {
-                    parsed.context_before = Some(parse_following_usize(&parsed.tokens, index));
+                    if let Some(value) = parse_following_usize(&parsed.tokens, index) {
+                        parsed.context_before = Some(value);
+                    }
                     index += 1;
                 }
                 "-C" | "--context" => {
-                    let value = parse_following_usize(&parsed.tokens, index);
-                    parsed.context_before = Some(value);
-                    parsed.context_after = Some(value);
+                    if let Some(value) = parse_following_usize(&parsed.tokens, index) {
+                        parsed.context_before = Some(value);
+                        parsed.context_after = Some(value);
+                    }
                     index += 1;
                 }
                 "--color" => {
@@ -229,21 +234,31 @@ impl ParsedRgArgs {
                 }
                 _ => {
                     if token.starts_with("--after-context=") {
-                        parsed.context_after = Some(parse_inline_usize(token));
+                        if let Some(value) = parse_inline_usize(token) {
+                            parsed.context_after = Some(value);
+                        }
                     } else if token.starts_with("--before-context=") {
-                        parsed.context_before = Some(parse_inline_usize(token));
+                        if let Some(value) = parse_inline_usize(token) {
+                            parsed.context_before = Some(value);
+                        }
                     } else if token.starts_with("--context=") {
-                        let value = parse_inline_usize(token);
-                        parsed.context_before = Some(value);
-                        parsed.context_after = Some(value);
+                        if let Some(value) = parse_inline_usize(token) {
+                            parsed.context_before = Some(value);
+                            parsed.context_after = Some(value);
+                        }
                     } else if token.starts_with("-A") && token.len() > 2 {
-                        parsed.context_after = Some(parse_short_inline_usize(token));
+                        if let Some(value) = parse_short_inline_usize(token) {
+                            parsed.context_after = Some(value);
+                        }
                     } else if token.starts_with("-B") && token.len() > 2 {
-                        parsed.context_before = Some(parse_short_inline_usize(token));
+                        if let Some(value) = parse_short_inline_usize(token) {
+                            parsed.context_before = Some(value);
+                        }
                     } else if token.starts_with("-C") && token.len() > 2 {
-                        let value = parse_short_inline_usize(token);
-                        parsed.context_before = Some(value);
-                        parsed.context_after = Some(value);
+                        if let Some(value) = parse_short_inline_usize(token) {
+                            parsed.context_before = Some(value);
+                            parsed.context_after = Some(value);
+                        }
                     } else if token.starts_with("--color=") {
                         // Absorbed by structured modes, preserved by raw modes.
                     } else if token.starts_with("--engine=") {
@@ -261,32 +276,25 @@ impl ParsedRgArgs {
         self.context_before.unwrap_or(0) > 0 || self.context_after.unwrap_or(0) > 0
     }
 
-    fn output_family_count(&self) -> usize {
-        let mut count = 0usize;
-        if self.has_json {
-            count += 1;
-        }
-        if self.has_count || self.has_count_matches {
-            count += 1;
-        }
-        if self.has_files_with_matches || self.has_files_without_match || self.has_files {
-            count += 1;
-        }
-        if self.context_requested() {
-            count += 1;
-        }
-        if self.requires_raw_text_mode() {
-            count += 1;
-        }
-        count
-    }
-
     fn has_output_conflict(&self) -> bool {
-        self.output_family_count() > 1
+        let has_count = self.has_count || self.has_count_matches;
+        let has_file_surface = self.has_files_with_matches || self.has_files_without_match || self.has_files;
+        (has_count && self.context_requested())
+            || (has_count && has_file_surface)
+            || (self.context_requested() && has_file_surface)
     }
 
     fn requires_raw_text_mode(&self) -> bool {
         self.has_heading || self.has_replace || self.has_type_list
+    }
+
+    fn json_event_stream_compatible(&self) -> bool {
+        !(self.has_count
+            || self.has_count_matches
+            || self.has_files_with_matches
+            || self.has_files_without_match
+            || self.has_files
+            || self.requires_raw_text_mode())
     }
 
     fn preferred_count_kind(&self) -> CountSurfaceKind {
@@ -336,11 +344,15 @@ impl ParsedRgArgs {
                     }
                 }
                 "--color" => {
-                    skip_current = true;
-                    skip_next = true;
+                    if token_value_is_valid_color(self.tokens.get(index + 1).map(String::as_str)) {
+                        skip_current = true;
+                        skip_next = true;
+                    }
                 }
                 "-A" | "-B" | "-C" | "--after-context" | "--before-context" | "--context" => {
-                    if !matches!(mode, ResolvedOutputMode::GroupedContext { .. }) {
+                    if parse_following_usize(&self.tokens, index).is_some()
+                        && !matches!(mode, ResolvedOutputMode::GroupedContext { .. })
+                    {
                         skip_current = true;
                         skip_next = true;
                     }
@@ -354,10 +366,15 @@ impl ParsedRgArgs {
                             || token.starts_with("-C"))
                             && token.len() > 2)
                     {
-                        if !matches!(mode, ResolvedOutputMode::GroupedContext { .. }) {
+                        let parsed_ok = if token.starts_with("--") {
+                            parse_inline_usize(token).is_some()
+                        } else {
+                            parse_short_inline_usize(token).is_some()
+                        };
+                        if parsed_ok && !matches!(mode, ResolvedOutputMode::GroupedContext { .. }) {
                             skip_current = true;
                         }
-                    } else if token.starts_with("--color=") {
+                    } else if token.starts_with("--color=") && inline_color_value_is_valid(token) {
                         skip_current = true;
                     }
                 }
@@ -518,8 +535,22 @@ fn resolve_output_mode(
     requested: SearchTextOutputMode,
     parsed: &ParsedRgArgs,
 ) -> ResolvedOutputMode {
+    if requested == SearchTextOutputMode::RawText {
+        return ResolvedOutputMode::RawText;
+    }
+    if requested == SearchTextOutputMode::RawJson {
+        return if parsed.json_event_stream_compatible() {
+            ResolvedOutputMode::RawJson
+        } else {
+            ResolvedOutputMode::RawText
+        };
+    }
     if parsed.has_json {
-        return ResolvedOutputMode::RawJson;
+        return if parsed.json_event_stream_compatible() {
+            ResolvedOutputMode::RawJson
+        } else {
+            ResolvedOutputMode::RawText
+        };
     }
     if parsed.has_output_conflict() {
         return ResolvedOutputMode::RawText;
@@ -580,7 +611,7 @@ fn resolve_output_mode(
             }
         }
         SearchTextOutputMode::RawText => ResolvedOutputMode::RawText,
-        SearchTextOutputMode::RawJson => ResolvedOutputMode::RawJson,
+        SearchTextOutputMode::RawJson => ResolvedOutputMode::RawText,
     }
 }
 
@@ -1042,22 +1073,31 @@ fn map_regex_error(query: &str, error: String) -> String {
     }
 }
 
-fn parse_following_usize(tokens: &[String], index: usize) -> usize {
+fn parse_following_usize(tokens: &[String], index: usize) -> Option<usize> {
     tokens
         .get(index + 1)
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0)
 }
 
-fn parse_inline_usize(token: &str) -> usize {
+fn parse_inline_usize(token: &str) -> Option<usize> {
     token
         .split_once('=')
         .and_then(|(_, value)| value.parse::<usize>().ok())
-        .unwrap_or(0)
 }
 
-fn parse_short_inline_usize(token: &str) -> usize {
-    token[2..].parse::<usize>().ok().unwrap_or(0)
+fn parse_short_inline_usize(token: &str) -> Option<usize> {
+    token[2..].parse::<usize>().ok()
+}
+
+fn token_value_is_valid_color(value: Option<&str>) -> bool {
+    matches!(value, Some("never" | "auto" | "always" | "ansi"))
+}
+
+fn inline_color_value_is_valid(token: &str) -> bool {
+    token
+        .split_once('=')
+        .map(|(_, value)| matches!(value, "never" | "auto" | "always" | "ansi"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1092,6 +1132,32 @@ mod tests {
             resolve_output_mode(SearchTextOutputMode::Auto, &parsed),
             ResolvedOutputMode::RawText
         );
+    }
+
+    #[test]
+    fn output_mode_auto_does_not_force_raw_json_for_non_event_json_combinations() {
+        let parsed = ParsedRgArgs::parse("--json --count-matches").expect("parse rg args");
+        assert_eq!(
+            resolve_output_mode(SearchTextOutputMode::Auto, &parsed),
+            ResolvedOutputMode::RawText
+        );
+    }
+
+    #[test]
+    fn explicit_raw_text_is_not_overridden_by_json_flag() {
+        let parsed = ParsedRgArgs::parse("--json -l").expect("parse rg args");
+        assert_eq!(
+            resolve_output_mode(SearchTextOutputMode::RawText, &parsed),
+            ResolvedOutputMode::RawText
+        );
+    }
+
+    #[test]
+    fn invalid_context_values_are_not_treated_as_valid_context_requests() {
+        let parsed = ParsedRgArgs::parse("-C nope").expect("parse rg args");
+        assert!(!parsed.context_requested());
+        assert!(parsed.structured_tokens(ResolvedOutputMode::Grouped).contains(&"-C".to_string()));
+        assert!(parsed.structured_tokens(ResolvedOutputMode::Grouped).contains(&"nope".to_string()));
     }
 
     #[test]

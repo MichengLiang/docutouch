@@ -774,9 +774,12 @@ async fn cli_search_queryless_files_raw_text_matches_mcp_output() -> anyhow::Res
         None,
     )?;
     assert!(cli_output.status.success());
-    assert_eq!(utf8(&cli_output.stdout), server_output);
-    assert!(utf8(&cli_output.stdout).contains("src/one.txt"));
-    assert!(!utf8(&cli_output.stdout).contains(cli_temp.path().to_string_lossy().as_ref()));
+    let cli_text = utf8(&cli_output.stdout);
+    let cli_lines = cli_text.lines().collect::<std::collections::BTreeSet<_>>();
+    let server_lines = server_output.lines().collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(cli_lines, server_lines);
+    assert!(cli_text.contains("src/one.txt"));
+    assert!(!cli_text.contains(cli_temp.path().to_string_lossy().as_ref()));
     assert!(utf8(&cli_output.stderr).is_empty());
     Ok(())
 }

@@ -1130,6 +1130,148 @@ async fn server_search_text_returns_raw_json_when_requested_by_rg_args() -> anyh
 }
 
 #[tokio::test]
+async fn server_search_text_invalid_context_value_is_reported_instead_of_being_swallowed()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.txt"), "search_text\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "search_text",
+                    "path": ".",
+                    "rg_args": "-C nope"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("invalid context value should fail");
+        assert!(err.to_string().contains("error parsing flag -C"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_invalid_color_value_is_reported_instead_of_being_swallowed()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("notes.txt"), "search_text\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let err = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "search_text",
+                    "path": ".",
+                    "rg_args": "--color banana"
+                }))),
+                task: None,
+            })
+            .await
+            .expect_err("invalid color value should fail");
+        assert!(err.to_string().contains("choice 'banana' is unrecognized"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_json_files_combination_falls_back_to_raw_text() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha\n")?;
+    std::fs::write(temp.path().join("src").join("two.txt"), "beta\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "",
+                    "path": ".",
+                    "rg_args": "--json --files"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(!text.contains("search_text["));
+        assert!(!text.starts_with('{'));
+        assert!(text.contains("./src/one.txt"));
+        assert!(text.contains("./src/two.txt"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_search_text_json_count_combination_falls_back_to_raw_text() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("one.txt"), "alpha alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "search_text".into(),
+                arguments: Some(json_object(json!({
+                    "query": "alpha",
+                    "path": ".",
+                    "rg_args": "--json --count-matches"
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(!text.contains("search_text["));
+        assert!(!text.starts_with('{'));
+        assert!(text.contains("./src/one.txt:2"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_search_text_ranks_by_matched_lines_then_hits_then_path() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::create_dir_all(temp.path().join("src"))?;

@@ -640,6 +640,31 @@ fn make_read_fixture(temp: &TempDir) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn make_list_type_fixture(temp: &TempDir) -> anyhow::Result<()> {
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::create_dir_all(temp.path().join("docs"))?;
+    std::fs::write(temp.path().join("src").join("main.rs"), "fn main() {}\n")?;
+    std::fs::write(temp.path().join("src").join("main.cpp"), "int main() {}\n")?;
+    std::fs::write(temp.path().join("docs").join("guide.md"), "# Guide\n")?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cli_list_can_filter_by_ripgrep_file_type() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    make_list_type_fixture(&temp)?;
+
+    let cli_output = run_cli(temp.path(), &["list", ".", "-trust", "-Tmarkdown"], None)?;
+    assert!(cli_output.status.success());
+    let stdout = utf8(&cli_output.stdout);
+    assert!(stdout.contains("main.rs"));
+    assert!(!stdout.contains("main.cpp"));
+    assert!(!stdout.contains("guide.md"));
+    assert!(stdout.contains("2 type"));
+    assert!(utf8(&cli_output.stderr).is_empty());
+    Ok(())
+}
+
 #[tokio::test]
 async fn cli_search_preview_matches_mcp_output() -> anyhow::Result<()> {
     let server_temp = tempfile::tempdir()?;

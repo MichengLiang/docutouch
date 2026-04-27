@@ -31,7 +31,7 @@ const APPLY_REWRITE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_re
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
 const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
-const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 接受任意 ripgrep 参数；工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。 优先使用rg --type-list限定范围，例如 cpp。";
+const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 接受任意 ripgrep 参数；工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。";
 const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
 #[derive(Clone)]
@@ -63,6 +63,16 @@ pub struct ListDirectoryArgs {
     #[schemars(description = "是否显示命中 .gitignore 规则的条目。默认 false。")]
     #[serde(default)]
     pub include_gitignored: bool,
+    #[schemars(
+        description = "按内置 ripgrep/ignore 默认文件类型别名只显示匹配的文件；例如 rust、cpp、ts、python。可传多个，目录作为匹配文件路径上下文显示，max_depth 边界目录会作为未展开的继续探索上下文保留。默认不过滤。"
+    )]
+    #[serde(default)]
+    pub file_types: Vec<String>,
+    #[schemars(
+        description = "按内置 ripgrep/ignore 默认文件类型别名排除匹配的文件；例如 markdown、json、minified。与 file_types 同时使用时，排除规则优先；暂不支持自定义 type-add 定义。默认不排除。"
+    )]
+    #[serde(default)]
+    pub file_types_not: Vec<String>,
     #[schemars(description = "可选时间戳字段。支持 created、modified；默认不显示时间戳。")]
     #[serde(default)]
     pub timestamp_fields: Vec<TimestampFieldInput>,
@@ -349,6 +359,8 @@ impl ToolService {
                 max_depth: args.max_depth,
                 show_hidden: args.show_hidden,
                 include_gitignored: args.include_gitignored,
+                file_types: args.file_types,
+                file_types_not: args.file_types_not,
                 timestamp_fields: args
                     .timestamp_fields
                     .into_iter()
@@ -657,7 +669,7 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     }
     tools.push(build_mcp_tool::<ListDirectoryArgs>(
         "list_directory",
-        "以 ASCII 树列出目录内容。默认显示文件大小与总行数；适合获取文件清单、判断阅读优先级和选择下一步要读的文件；可选显示隐藏项、Git ignore 项以及时间戳字段。",
+        "以 ASCII 树列出目录内容。默认显示文件大小与总行数；适合获取文件清单、判断阅读优先级和选择下一步要读的文件。可选显示隐藏项、Git ignore 项、时间戳字段，并可用 `file_types` / `file_types_not` 按内置 ripgrep/ignore 默认文件类型别名过滤文件，例如 rust、cpp、ts、python；暂不支持自定义 type-add 定义，先用 `search_text` 的 `rg_args=\"--type-list\"` 查看常见内置类型。",
     )?);
     tools.push(build_mcp_tool::<ReadFileArgs>(
         "read_file",

@@ -34,6 +34,8 @@ struct ListCommand {
     max_depth: usize,
     show_hidden: bool,
     include_gitignored: bool,
+    file_types: Vec<String>,
+    file_types_not: Vec<String>,
     timestamp_fields: Vec<TimestampField>,
 }
 
@@ -186,6 +188,8 @@ fn parse_list_command(args: &[String]) -> Result<ListCommand, String> {
     let mut max_depth = 3usize;
     let mut show_hidden = false;
     let mut include_gitignored = false;
+    let mut file_types = Vec::new();
+    let mut file_types_not = Vec::new();
     let mut timestamp_fields = Vec::new();
     let mut index = 0usize;
     while index < args.len() {
@@ -199,6 +203,20 @@ fn parse_list_command(args: &[String]) -> Result<ListCommand, String> {
             show_hidden = true;
         } else if arg == "--include-gitignored" {
             include_gitignored = true;
+        } else if let Some(value) = arg.strip_prefix("--type=") {
+            file_types.push(parse_file_type_flag("--type", value)?);
+        } else if arg == "--type" || arg == "-t" {
+            index += 1;
+            file_types.push(parse_file_type_flag(arg, value_at(args, index, arg)?)?);
+        } else if let Some(value) = arg.strip_prefix("-t") {
+            file_types.push(parse_file_type_flag("-t", value)?);
+        } else if let Some(value) = arg.strip_prefix("--type-not=") {
+            file_types_not.push(parse_file_type_flag("--type-not", value)?);
+        } else if arg == "--type-not" || arg == "-T" {
+            index += 1;
+            file_types_not.push(parse_file_type_flag(arg, value_at(args, index, arg)?)?);
+        } else if let Some(value) = arg.strip_prefix("-T") {
+            file_types_not.push(parse_file_type_flag("-T", value)?);
         } else if let Some(value) = arg.strip_prefix("--timestamp-field=") {
             timestamp_fields.push(parse_timestamp_field(value)?);
         } else if arg == "--timestamp-field" {
@@ -222,6 +240,8 @@ fn parse_list_command(args: &[String]) -> Result<ListCommand, String> {
         max_depth,
         show_hidden,
         include_gitignored,
+        file_types,
+        file_types_not,
         timestamp_fields,
     })
 }
@@ -456,6 +476,8 @@ async fn run_list(command: ListCommand) -> Result<i32> {
             max_depth: command.max_depth,
             show_hidden: command.show_hidden,
             include_gitignored: command.include_gitignored,
+            file_types: command.file_types,
+            file_types_not: command.file_types_not,
             timestamp_fields: command.timestamp_fields,
         },
     );
@@ -665,6 +687,14 @@ fn parse_usize_flag(flag: &str, value: &str) -> Result<usize, String> {
         .map_err(|_| format!("{flag} requires an integer value"))
 }
 
+fn parse_file_type_flag(flag: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{flag} requires a non-empty file type"));
+    }
+    Ok(trimmed.to_string())
+}
+
 fn parse_timestamp_field(value: &str) -> Result<TimestampField, String> {
     match value {
         "created" => Ok(TimestampField::Created),
@@ -747,7 +777,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--query-mode auto|literal|regex] [--output-mode auto|grouped|grouped_context|counts|files|raw_text|raw_json] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` is the smart single-entry ripgrep surface: `query_mode auto` will fallback to literal on regex parse errors, and `output_mode auto` will infer grouped/counts/files/raw outputs from `rg_args`.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [-t|--type TYPE] [-T|--type-not TYPE] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--query-mode auto|literal|regex] [--output-mode auto|grouped|grouped_context|counts|files|raw_text|raw_json] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `list` supports built-in ripgrep/ignore file type aliases with `-t/--type` and `-T/--type-not`; custom type-add definitions are not supported.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` is the smart single-entry ripgrep surface: `query_mode auto` will fallback to literal on regex parse errors, and `output_mode auto` will infer grouped/counts/files/raw outputs from `rg_args`.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 

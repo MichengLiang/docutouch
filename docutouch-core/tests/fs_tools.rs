@@ -22,6 +22,8 @@ fn list_directory_hides_gitignored_entries_by_default() {
             max_depth: 3,
             show_hidden: false,
             include_gitignored: false,
+            file_types: Vec::new(),
+            file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
         },
     )
@@ -31,6 +33,131 @@ fn list_directory_hides_gitignored_entries_by_default() {
     assert!(!result.tree.contains("cache.txt"));
     assert!(result.tree.contains("visible.txt"));
     assert_eq!(result.filtered_gitignored_count, 2);
+}
+
+#[test]
+fn list_directory_can_include_ripgrep_file_types() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(temp.path().join("src")).expect("src dir");
+    std::fs::write(temp.path().join("src").join("main.rs"), "fn main() {}\n").expect("write rust");
+    std::fs::write(temp.path().join("src").join("main.cpp"), "int main() {}\n").expect("write cpp");
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 3,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: vec!["rust".to_string()],
+            file_types_not: Vec::new(),
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect("list directory");
+
+    assert!(result.tree.contains("main.rs"));
+    assert!(!result.tree.contains("main.cpp"));
+    assert!(!result.tree.contains("README.md"));
+    assert_eq!(result.filtered_type_count, 2);
+    assert!(result.display().contains("2 type"));
+}
+
+#[test]
+fn list_directory_can_exclude_ripgrep_file_types() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").expect("write rust");
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 2,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: Vec::new(),
+            file_types_not: vec!["markdown".to_string()],
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect("list directory");
+
+    assert!(result.tree.contains("main.rs"));
+    assert!(!result.tree.contains("README.md"));
+    assert_eq!(result.filtered_type_count, 1);
+}
+
+#[test]
+fn list_directory_type_exclusion_wins_over_inclusion() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").expect("write rust");
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 2,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: vec!["rust".to_string(), "markdown".to_string()],
+            file_types_not: vec!["rust".to_string()],
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect("list directory");
+
+    assert!(!result.tree.contains("main.rs"));
+    assert!(result.tree.contains("README.md"));
+    assert_eq!(result.filtered_type_count, 1);
+}
+
+#[test]
+fn list_directory_keeps_max_depth_boundary_dirs_under_type_filter() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(temp.path().join("src").join("nested")).expect("nested dir");
+    std::fs::write(
+        temp.path().join("src").join("nested").join("main.rs"),
+        "fn main() {}\n",
+    )
+    .expect("write rust");
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 1,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: vec!["rust".to_string()],
+            file_types_not: Vec::new(),
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect("list directory");
+
+    assert!(result.tree.contains("src/"));
+    assert!(!result.tree.contains("main.rs"));
+    assert!(!result.tree.contains("README.md"));
+    assert_eq!(result.filtered_type_count, 1);
+}
+
+#[test]
+fn list_directory_reports_unknown_ripgrep_file_type() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let err = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 2,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: vec!["notatype".to_string()],
+            file_types_not: Vec::new(),
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect_err("unknown type should fail");
+
+    assert!(err.to_string().contains("notatype"));
 }
 
 #[test]
@@ -422,6 +549,8 @@ fn list_directory_can_show_requested_timestamps() {
             max_depth: 2,
             show_hidden: false,
             include_gitignored: true,
+            file_types: Vec::new(),
+            file_types_not: Vec::new(),
             timestamp_fields: vec![TimestampField::Modified],
         },
     )

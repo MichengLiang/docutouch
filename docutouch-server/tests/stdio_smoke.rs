@@ -2193,6 +2193,79 @@ async fn server_list_directory_can_show_requested_timestamps() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn server_list_directory_can_filter_by_ripgrep_file_type() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::create_dir_all(temp.path().join("src"))?;
+    std::fs::write(temp.path().join("src").join("main.rs"), "fn main() {}\n")?;
+    std::fs::write(temp.path().join("src").join("main.cpp"), "int main() {}\n")?;
+    std::fs::write(temp.path().join("README.md"), "# notes\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": ".",
+                    "file_types": ["rust"]
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("main.rs"));
+        assert!(!text.contains("main.cpp"));
+        assert!(!text.contains("README.md"));
+        assert!(text.contains("2 type"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_list_directory_can_exclude_ripgrep_file_type() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("main.rs"), "fn main() {}\n")?;
+    std::fs::write(temp.path().join("README.md"), "# notes\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": ".",
+                    "file_types_not": ["markdown"]
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("main.rs"));
+        assert!(!text.contains("README.md"));
+        assert!(text.contains("1 type"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_reports_outer_format_failure() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     with_server_client!(temp.path(), client, {

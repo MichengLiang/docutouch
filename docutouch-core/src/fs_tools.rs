@@ -1,4 +1,6 @@
+use ignore::Match;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use ignore::types::{Types, TypesBuilder};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,8 @@ pub struct DirectoryListOptions {
     pub max_depth: usize,
     pub show_hidden: bool,
     pub include_gitignored: bool,
+    pub file_types: Vec<String>,
+    pub file_types_not: Vec<String>,
     pub timestamp_fields: Vec<TimestampField>,
 }
 
@@ -28,6 +32,7 @@ pub struct DirectoryListResult {
     pub filtered_hidden_count: usize,
     pub filtered_gitignored_count: usize,
     pub filtered_both_count: usize,
+    pub filtered_type_count: usize,
 }
 
 impl DirectoryListResult {
@@ -46,20 +51,29 @@ impl DirectoryListResult {
             "{} {}, {} {}",
             self.dir_count, dir_word, self.file_count, file_word
         );
-        let filtered_total =
-            self.filtered_hidden_count + self.filtered_gitignored_count + self.filtered_both_count;
+        let filtered_total = self.filtered_hidden_count
+            + self.filtered_gitignored_count
+            + self.filtered_both_count
+            + self.filtered_type_count;
         if filtered_total == 0 {
             return format!("{}\n{}", self.tree, stats);
         }
 
+        let mut filtered_parts = vec![
+            format!("{} hidden", self.filtered_hidden_count),
+            format!("{} gitignored", self.filtered_gitignored_count),
+            format!("{} both", self.filtered_both_count),
+        ];
+        if self.filtered_type_count > 0 {
+            filtered_parts.push(format!("{} type", self.filtered_type_count));
+        }
+
         format!(
-            "{}\n{}\nfiltered: {} entries ({} hidden, {} gitignored, {} both)",
+            "{}\n{}\nfiltered: {} entries ({})",
             self.tree,
             stats,
             filtered_total,
-            self.filtered_hidden_count,
-            self.filtered_gitignored_count,
-            self.filtered_both_count,
+            filtered_parts.join(", "),
         )
     }
 }
@@ -178,6 +192,7 @@ pub fn list_directory(
     } else {
         options.max_depth
     };
+    let type_matcher = build_type_matcher(&options)?;
     let repo_root = find_git_repo_root(dir_path);
     let mut matcher_cache: HashMap<PathBuf, Vec<GitIgnoreMatcher>> = HashMap::new();
     let mut lines = vec![format!("{}/", display_dir_name(dir_path))];
@@ -189,6 +204,7 @@ pub fn list_directory(
         1,
         max_depth,
         &options,
+        type_matcher.as_ref(),
         repo_root.as_deref(),
         &mut matcher_cache,
         &mut lines,
@@ -202,6 +218,7 @@ pub fn list_directory(
         filtered_hidden_count: counts.filtered_hidden_count,
         filtered_gitignored_count: counts.filtered_gitignored_count,
         filtered_both_count: counts.filtered_both_count,
+        filtered_type_count: counts.filtered_type_count,
     })
 }
 
@@ -272,6 +289,7 @@ struct Counts {
     filtered_hidden_count: usize,
     filtered_gitignored_count: usize,
     filtered_both_count: usize,
+    filtered_type_count: usize,
 }
 
 fn walk_directory(
@@ -280,13 +298,14 @@ fn walk_directory(
     depth: usize,
     max_depth: usize,
     options: &DirectoryListOptions,
+    type_matcher: Option<&Types>,
     repo_root: Option<&Path>,
     matcher_cache: &mut HashMap<PathBuf, Vec<GitIgnoreMatcher>>,
     lines: &mut Vec<String>,
     counts: &mut Counts,
-) {
+) -> bool {
     if depth > max_depth {
-        return;
+        return false;
     }
 
     let mut children = match fs::read_dir(current_path) {
@@ -294,7 +313,7 @@ fn walk_directory(
             .filter_map(Result::ok)
             .map(|entry| entry.path())
             .collect::<Vec<_>>(),
-        Err(_) => return,
+        Err(_) => return false,
     };
     children.sort_by(|lhs, rhs| {
         let lhs_is_dir = lhs.is_dir();
@@ -338,41 +357,122 @@ fn walk_directory(
             }
             continue;
         }
+        if child.is_file() && is_type_filtered(&child, type_matcher) {
+            counts.filtered_type_count += 1;
+            continue;
+        }
         visible_children.push(child);
     }
 
-    for (index, child) in visible_children.iter().enumerate() {
-        let is_last = index + 1 == visible_children.len();
-        let connector = if is_last { "└── " } else { "├── " };
-        let child_prefix = if is_last { "    " } else { "│   " };
+    let mut rendered_children = Vec::new();
+    for child in &visible_children {
         let name = child
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
 
         if child.is_dir() {
-            lines.push(format!("{}{}{}/", prefix, connector, name));
-            counts.dir_count += 1;
-            if depth < max_depth {
+            let mut child_lines = Vec::new();
+            let child_has_visible = if depth < max_depth {
                 walk_directory(
                     child,
-                    &format!("{}{}", prefix, child_prefix),
+                    "",
                     depth + 1,
                     max_depth,
                     options,
+                    type_matcher,
                     repo_root,
                     matcher_cache,
-                    lines,
+                    &mut child_lines,
                     counts,
-                );
+                )
+            } else {
+                true
+            };
+            if type_matcher.is_some() && !child_has_visible {
+                continue;
             }
+            rendered_children.push(RenderedChild {
+                name: format!("{name}/"),
+                metadata: None,
+                child_lines,
+            });
+            counts.dir_count += 1;
             continue;
         }
 
         let metadata = format_file_metadata(child, options);
-        lines.push(format!("{}{}{} ({})", prefix, connector, name, metadata));
+        rendered_children.push(RenderedChild {
+            name: name.to_string(),
+            metadata: Some(metadata),
+            child_lines: Vec::new(),
+        });
         counts.file_count += 1;
     }
+
+    for (index, child) in rendered_children.iter().enumerate() {
+        let is_last = index + 1 == rendered_children.len();
+        let connector = if is_last { "└── " } else { "├── " };
+        let child_prefix = if is_last { "    " } else { "│   " };
+        match child.metadata.as_ref() {
+            Some(metadata) => lines.push(format!(
+                "{}{}{} ({})",
+                prefix, connector, child.name, metadata
+            )),
+            None => {
+                lines.push(format!("{}{}{}", prefix, connector, child.name));
+                for child_line in &child.child_lines {
+                    lines.push(format!("{}{}{}", prefix, child_prefix, child_line));
+                }
+            }
+        }
+    }
+
+    !rendered_children.is_empty()
+}
+
+struct RenderedChild {
+    name: String,
+    metadata: Option<String>,
+    child_lines: Vec<String>,
+}
+
+fn build_type_matcher(options: &DirectoryListOptions) -> std::io::Result<Option<Types>> {
+    if options.file_types.is_empty() && options.file_types_not.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = TypesBuilder::new();
+    builder.add_defaults();
+    for file_type in &options.file_types {
+        let name = parse_file_type_name("file_types", file_type)?;
+        builder.select(name);
+    }
+    for file_type in &options.file_types_not {
+        let name = parse_file_type_name("file_types_not", file_type)?;
+        builder.negate(name);
+    }
+    builder
+        .build()
+        .map(Some)
+        .map_err(|err| std::io::Error::other(format!("invalid file type filter: {err}")))
+}
+
+fn parse_file_type_name<'a>(field_name: &str, value: &'a str) -> std::io::Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(std::io::Error::other(format!(
+            "{field_name} cannot contain an empty file type"
+        )));
+    }
+    Ok(trimmed)
+}
+
+fn is_type_filtered(path: &Path, type_matcher: Option<&Types>) -> bool {
+    let Some(type_matcher) = type_matcher else {
+        return false;
+    };
+    matches!(type_matcher.matched(path, false), Match::Ignore(_))
 }
 
 fn get_active_matchers(

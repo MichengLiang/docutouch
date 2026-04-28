@@ -91,9 +91,9 @@ fn render_affected_change_lines(
     render_shared_affected_change_lines(
         display_base_dir,
         prefix,
-        affected.added.iter().map(|path| Path::new(path)),
-        affected.modified.iter().map(|path| Path::new(path)),
-        affected.deleted.iter().map(|path| Path::new(path)),
+        affected.added.iter().map(Path::new),
+        affected.modified.iter().map(Path::new),
+        affected.deleted.iter().map(Path::new),
     )
 }
 
@@ -689,11 +689,11 @@ mod tests {
         );
 
         assert!(
-            !lines.iter().any(|line| *line == "missing a"),
+            !lines.contains(&"missing a"),
             "multiline cause leaked out of indentation:\n{message}"
         );
         assert!(
-            !lines.iter().any(|line| *line == "missing b"),
+            !lines.contains(&"missing b"),
             "multiline cause leaked out of indentation:\n{message}"
         );
         assert!(

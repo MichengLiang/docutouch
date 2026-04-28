@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use crate::line_boundary::{
     ends_with_line_break, needs_boundary_prefix, needs_boundary_suffix,
     normalize_payload_for_target_boundaries,

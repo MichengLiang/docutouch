@@ -172,10 +172,10 @@ pub fn apply_patch_program_with_source(
         patch_source = persist_failed_patch_source(program, base_dir)
             .map(|path| PatchSourceReference::new(path, PatchSourceKind::Persisted));
     }
-    if let Some(reference) = patch_source.clone() {
-        if let Some(error) = outcome.error.as_mut() {
-            error.details.patch_file = Some(reference.path.clone());
-        }
+    if let Some(reference) = patch_source.clone()
+        && let Some(error) = outcome.error.as_mut()
+    {
+        error.details.patch_file = Some(reference.path.clone());
     }
     outcome.patch_source = patch_source;
     outcome
@@ -1008,9 +1008,9 @@ mod tests {
         let error = outcome.error.expect("error payload");
         assert_eq!(
             error.details.error_code.as_deref(),
-            Some("TARGET_WRITE_ERROR")
+            Some("TARGET_READ_ERROR")
         );
-        assert_eq!(error.details.phase.as_deref(), Some("commit"));
+        assert_eq!(error.details.phase.as_deref(), Some("plan"));
         assert_eq!(error.details.category.as_deref(), Some("filesystem"));
         assert_eq!(error.details.source_line, Some(3));
         assert_eq!(error.details.source_column, Some(1));

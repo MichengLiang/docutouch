@@ -75,15 +75,22 @@ BETA
 
     let commented_dir = tempfile::tempdir().expect("commented tempdir");
     let plain_dir = tempfile::tempdir().expect("plain tempdir");
-    std::fs::write(commented_dir.path().join("app.txt"), "alpha\nbeta\ngamma\n").expect("write app");
+    std::fs::write(commented_dir.path().join("app.txt"), "alpha\nbeta\ngamma\n")
+        .expect("write app");
     std::fs::write(plain_dir.path().join("app.txt"), "alpha\nbeta\ngamma\n").expect("write app");
 
     let commented =
         apply_rewrite_program(with_comment, commented_dir.path()).expect("commented rewrite");
     let plain = apply_rewrite_program(without_comment, plain_dir.path()).expect("plain rewrite");
 
-    assert_eq!(read(&commented_dir.path().join("app.txt")), "alpha\nBETA\ngamma\n");
-    assert_eq!(read(&plain_dir.path().join("app.txt")), "alpha\nBETA\ngamma\n");
+    assert_eq!(
+        read(&commented_dir.path().join("app.txt")),
+        "alpha\nBETA\ngamma\n"
+    );
+    assert_eq!(
+        read(&plain_dir.path().join("app.txt")),
+        "alpha\nBETA\ngamma\n"
+    );
     assert!(commented.affected.added.is_empty());
     assert!(plain.affected.added.is_empty());
     assert_eq!(commented.affected.modified.len(), 1);

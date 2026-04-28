@@ -292,6 +292,7 @@ struct Counts {
     filtered_type_count: usize,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_directory(
     current_path: &Path,
     prefix: &str,
@@ -842,8 +843,8 @@ fn render_sampled_view(
 
     while block_start < lines.len() {
         let block_end = (block_start + options.sample_lines).min(lines.len());
-        for index in block_start..block_end {
-            let rendered_line = truncate_line(lines[index], max_chars);
+        for (index, line) in lines.iter().enumerate().take(block_end).skip(block_start) {
+            let rendered_line = truncate_line(line, max_chars);
             if show_line_numbers {
                 rendered.push_str(&format!(
                     "{:>width$} | {}",

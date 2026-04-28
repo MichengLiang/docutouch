@@ -479,14 +479,14 @@ fn validate_selection_items(items: &[SelectionItem]) -> Result<(), SelectionPars
                         ));
                     }
                 }
-                if let Some(last_seen) = last_number_before_gap {
-                    if line.line_number <= last_seen {
-                        return Err(SelectionParseError::new(
-                            SelectionDiagnosticCode::Invalid,
-                            "selection line numbers must be strictly increasing",
-                            Some(item_index),
-                        ));
-                    }
+                if let Some(last_seen) = last_number_before_gap
+                    && line.line_number <= last_seen
+                {
+                    return Err(SelectionParseError::new(
+                        SelectionDiagnosticCode::Invalid,
+                        "selection line numbers must be strictly increasing",
+                        Some(item_index),
+                    ));
                 }
                 previous_line_number = Some(line.line_number);
                 previous_was_omission = false;

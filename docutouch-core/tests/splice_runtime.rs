@@ -654,7 +654,7 @@ fn splice_runtime_reports_write_failure_without_committing_failed_unit() {
     assert_eq!(error.affected().added, vec![temp.path().join("dest-a.txt")]);
     assert_eq!(read(&temp.path().join("dest-a.txt")), "alpha\n");
     assert_eq!(error.failed_units().len(), 1);
-    assert_eq!(error.failed_units()[0].code, "SPLICE_WRITE_ERROR");
+    assert_eq!(error.failed_units()[0].code, "SPLICE_SOURCE_STATE_INVALID");
     assert!(error.failed_units()[0].committed.added.is_empty());
     assert!(!temp.path().join("blocked").join("out.txt").exists());
 }

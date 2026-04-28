@@ -330,11 +330,146 @@ async fn server_lists_expected_tools() -> anyhow::Result<()> {
         assert!(tool_names.contains(&"list_directory".to_string()));
         assert!(tool_names.contains(&"read_file".to_string()));
         assert!(tool_names.contains(&"search_text".to_string()));
+        assert!(tool_names.contains(&"structural_search".to_string()));
         assert!(tool_names.contains(&"wait_pueue".to_string()));
         assert!(!tool_names.contains(&"read_files".to_string()));
         assert!(tool_names.contains(&"apply_patch".to_string()));
         assert!(tool_names.contains(&"apply_rewrite".to_string()));
         assert!(tool_names.contains(&"apply_splice".to_string()));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_structural_search_find_and_expand_use_workspace_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let src_dir = temp.path().join("src");
+    std::fs::create_dir_all(&src_dir)?;
+    std::fs::write(
+        src_dir.join("lib.rs"),
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    )?;
+
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "find",
+                    "pattern": "evaluate_exec_policy($$$ARGS)",
+                    "path": "src",
+                    "language": "rust",
+                    "include_tests": true
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("structural_search[find] q1"));
+        assert!(text.contains("src/lib.rs:1"));
+        assert!(text.contains("expand 1"));
+
+        let expanded = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "expand",
+                    "ref": "1"
+                }))),
+                task: None,
+            })
+            .await?;
+        let expanded_text = &expanded.content[0].as_text().unwrap().text;
+        assert!(expanded_text.contains("structural_search[expand] q2"));
+        assert!(expanded_text.contains("from: q1.[1]"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_structural_search_query_numbers_are_connection_local() -> anyhow::Result<()> {
+    let first = tempfile::tempdir()?;
+    std::fs::create_dir_all(first.path().join("src"))?;
+    std::fs::write(
+        first.path().join("src/lib.rs"),
+        "pub fn run() { first_policy(ctx); }\n",
+    )?;
+    let second = tempfile::tempdir()?;
+    std::fs::create_dir_all(second.path().join("src"))?;
+    std::fs::write(
+        second.path().join("src/lib.rs"),
+        "pub fn run() { second_policy(ctx); }\n",
+    )?;
+
+    with_server_client!(first.path(), first_client, {
+        first_client
+            .call_tool(support::workspace_tool_call(first.path()))
+            .await?;
+        let first_result = first_client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "find",
+                    "pattern": "first_policy($$$ARGS)",
+                    "path": "src",
+                    "language": "rust",
+                    "include_tests": true
+                }))),
+                task: None,
+            })
+            .await?;
+        let first_text = &first_result.content[0].as_text().unwrap().text;
+        assert!(first_text.contains("structural_search[find] q1"));
+        assert!(first_text.contains("first_policy(ctx)"));
+
+        with_server_client!(second.path(), second_client, {
+            second_client
+                .call_tool(support::workspace_tool_call(second.path()))
+                .await?;
+            let second_result = second_client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "structural_search".into(),
+                    arguments: Some(json_object(json!({
+                        "mode": "find",
+                        "pattern": "second_policy($$$ARGS)",
+                        "path": "src",
+                        "language": "rust",
+                        "include_tests": true
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let second_text = &second_result.content[0].as_text().unwrap().text;
+            assert!(second_text.contains("structural_search[find] q1"));
+            assert!(second_text.contains("second_policy(ctx)"));
+
+            Ok(())
+        })?;
+
+        let expanded = first_client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "expand",
+                    "ref": "1"
+                }))),
+                task: None,
+            })
+            .await?;
+        let expanded_text = &expanded.content[0].as_text().unwrap().text;
+        assert!(expanded_text.contains("structural_search[expand] q2"));
+        assert!(expanded_text.contains("from: q1.[1]"));
+        assert!(expanded_text.contains("first_policy(ctx)"));
 
         Ok(())
     })
@@ -356,19 +491,25 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
         let tools = client.list_all_tools().await?;
         let read_file = tools
             .iter()
-            .find(|tool| tool.name.to_string() == "read_file")
+            .find(|tool| tool.name.as_ref() == "read_file")
             .expect("read_file tool");
         let search_text = tools
             .iter()
-            .find(|tool| tool.name.to_string() == "search_text")
+            .find(|tool| tool.name.as_ref() == "search_text")
             .expect("search_text tool");
+        let structural_search = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "structural_search")
+            .expect("structural_search tool");
         let wait_pueue = tools
             .iter()
-            .find(|tool| tool.name.to_string() == "wait_pueue")
+            .find(|tool| tool.name.as_ref() == "wait_pueue")
             .expect("wait_pueue tool");
 
         assert!(tool_description(read_file).contains("pueue-log:<id>"));
         assert!(tool_description(search_text).contains("pueue-log:<id>"));
+        assert!(tool_description(structural_search).contains("AST 结构查询工具"));
+        assert!(tool_description(structural_search).contains("unsupported-rule-field"));
         assert!(tool_description(wait_pueue).contains("pueue-log:<id>"));
 
         assert!(
@@ -382,6 +523,8 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
         assert!(!read_line_range_description.contains("start,end"));
         assert!(!read_line_range_description.contains("step"));
         assert!(input_schema_property_description(search_text, "path").contains("pueue-log:<id>"));
+        assert!(input_schema_property_description(structural_search, "mode").contains("find"));
+        assert!(input_schema_property_description(structural_search, "ref").contains("qN.N"));
 
         Ok(())
     })
@@ -1023,7 +1166,10 @@ async fn server_search_text_absorbs_redundant_line_number_flag() -> anyhow::Resu
 async fn server_search_text_infers_grouped_context_for_context_flag() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::create_dir_all(temp.path().join("src"))?;
-    std::fs::write(temp.path().join("src").join("one.txt"), "before\nalpha\nafter\n")?;
+    std::fs::write(
+        temp.path().join("src").join("one.txt"),
+        "before\nalpha\nafter\n",
+    )?;
     with_server_client!(temp.path(), client, {
         client
             .call_tool(CallToolRequestParams {
@@ -2638,7 +2784,7 @@ async fn server_reports_commit_stage_source_span_for_write_failure() -> anyhow::
         .expect_err("patch should fail");
 
         let message = err.to_string();
-        assert!(message.contains("TARGET_WRITE_ERROR"));
+        assert!(message.contains("TARGET_READ_ERROR"));
         assert!(!message.contains("<patch>:3:1"));
         assert!(message.contains("3 | *** Move to: blocked/dir/name.txt"));
         assert!(message.contains("= action: 1"));
@@ -2883,7 +3029,7 @@ async fn server_rolls_back_failed_move_group() -> anyhow::Result<()> {
         .expect_err("move group should fail");
 
         let message = err.to_string();
-        assert!(message.contains("TARGET_WRITE_ERROR"));
+        assert!(message.contains("TARGET_READ_ERROR"));
         assert!(!message.contains("failed file groups:"));
         assert_eq!(
             std::fs::read_to_string(temp.path().join("src").join("name.txt"))?,

@@ -500,17 +500,14 @@ impl ToolService {
                 if path_input.is_empty() {
                     return Err(ServiceError::invalid_argument("path cannot be empty"));
                 }
-                resolve_search_surface_paths(
+                resolve_structural_search_paths(
                     &path_input
                         .paths()
                         .into_iter()
                         .map(ToOwned::to_owned)
                         .collect::<Vec<_>>(),
                     display_base_dir.as_deref(),
-                    display_base_dir.as_deref(),
-                )
-                .await?
-                .search_paths
+                )?
             }
             None => display_base_dir.clone().into_iter().collect(),
         };
@@ -1484,6 +1481,26 @@ fn normalize_display_path(path: &Path) -> PathBuf {
 
 fn strip_windows_verbatim_prefix(raw: &str) -> String {
     raw.strip_prefix(r"\\?\").unwrap_or(raw).to_string()
+}
+
+fn resolve_structural_search_paths(
+    raw_paths: &[String],
+    workspace: Option<&Path>,
+) -> Result<Vec<PathBuf>, ServiceError> {
+    let mut search_paths = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_path in raw_paths {
+        if raw_path.trim().is_empty() {
+            return Err(ServiceError::invalid_argument(
+                "path cannot contain an empty entry",
+            ));
+        }
+        let path = resolve_user_path(raw_path, workspace)?;
+        if seen.insert(path.clone()) {
+            search_paths.push(path);
+        }
+    }
+    Ok(search_paths)
 }
 
 fn normalize_display_text(raw: &str) -> String {

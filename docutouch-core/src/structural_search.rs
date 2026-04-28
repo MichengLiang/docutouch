@@ -232,7 +232,13 @@ impl StructuralSearchSession {
                 matches: group.matches.clone(),
             }],
         );
-        Ok(format_expand_result(qid, query_id, group_index, &group))
+        Ok(format_expand_result(
+            qid,
+            query_id,
+            group_index,
+            &group,
+            &options,
+        ))
     }
 
     fn around(&mut self, options: StructuralSearchOptions) -> Result<String, String> {
@@ -614,19 +620,24 @@ fn format_expand_result(
     source_query: usize,
     source_group: usize,
     group: &StructuralSearchGroup,
+    options: &StructuralSearchOptions,
 ) -> String {
     let mut out = String::new();
+    let total_matches = group.matches.len();
+    let display_limit = match options.view {
+        StructuralSearchView::Preview => options.limit.unwrap_or(DEFAULT_LIMIT),
+        StructuralSearchView::Full => usize::MAX,
+    };
+    let displayed_matches = total_matches.min(display_limit);
     out.push_str(&format!("structural_search[expand] q{qid}\n"));
     out.push_str(&format!(
         "from: q{source_query}.[{source_group}] {}\n",
         group.title
     ));
     out.push_str(&format!(
-        "matches: {} displayed, {} total\n\n",
-        group.matches.len(),
-        group.matches.len()
+        "matches: {displayed_matches} displayed, {total_matches} total\n\n",
     ));
-    for (index, item) in group.matches.iter().enumerate() {
+    for (index, item) in group.matches.iter().take(displayed_matches).enumerate() {
         out.push_str(&format!("[{}] {}:{}\n", index + 1, item.file, item.line));
         out.push_str(&format!("  text: {}\n", item.text));
         out.push_str(&format!("  context: {}\n", item.lines));
@@ -634,6 +645,16 @@ fn format_expand_result(
         append_capture_lines(&mut out, &item.captures, "    ");
         out.push('\n');
     }
+    out.push_str("omitted:\n");
+    if total_matches > displayed_matches {
+        out.push_str(&format!(
+            "- {} matches not shown\n",
+            total_matches - displayed_matches
+        ));
+    } else {
+        out.push_str("- none\n");
+    }
+    out.push('\n');
     out.push_str("next:\n");
     out.push_str("- around 1       show local structure for the first match\n");
     out
@@ -1066,8 +1087,12 @@ fn is_test_path(path: &str) -> bool {
     lowered.contains("/tests/")
         || lowered.contains("/test/")
         || lowered.contains("/__tests__/")
+        || lowered.ends_with("/tests.rs")
+        || lowered.ends_with("/test.rs")
         || lowered.ends_with("_test.rs")
         || lowered.ends_with("_tests.rs")
+        || lowered.ends_with("_spec.rs")
+        || lowered.ends_with("_specs.rs")
         || lowered.contains(".test.")
         || lowered.contains(".spec.")
         || lowered

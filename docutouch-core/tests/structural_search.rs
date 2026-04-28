@@ -120,6 +120,39 @@ pub fn run() {
 }
 
 #[tokio::test]
+async fn expand_respects_preview_limit_and_reports_hidden_matches() {
+    let dir = tempdir().expect("tempdir");
+    for index in 0..5 {
+        write_file(
+            dir.path(),
+            &format!("src/policy_{index}.rs"),
+            &format!("pub fn run_{index}() {{ evaluate_exec_policy(ctx, command_{index}); }}\n"),
+        );
+    }
+
+    let mut session = StructuralSearchSession::default();
+    session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+
+    let expanded = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            limit: Some(2),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("expand");
+
+    assert!(expanded.contains("matches: 2 displayed, 5 total"));
+    assert!(expanded.contains("omitted:"));
+    assert!(expanded.contains("3 matches not shown"));
+    assert!(!expanded.contains("[3]"));
+}
+
+#[tokio::test]
 async fn no_matches_allocates_query_but_has_no_expandable_group() {
     let dir = tempdir().expect("tempdir");
     write_file(dir.path(), "src/lib.rs", "pub fn run() {}\n");
@@ -169,6 +202,34 @@ async fn include_tests_false_excludes_test_files() {
     assert!(output.contains("tests excluded"));
     assert!(output.contains("src/lib.rs:1"));
     assert!(!output.contains("tests/policy_tests.rs"));
+}
+
+#[tokio::test]
+async fn include_tests_false_excludes_rust_tests_module_files() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/session/mod.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+    write_file(
+        dir.path(),
+        "src/session/tests.rs",
+        "fn test_run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            include_tests: false,
+            ..find_options(dir.path(), "evaluate_exec_policy($$$ARGS)")
+        })
+        .await
+        .expect("find");
+
+    assert!(output.contains("tests excluded"));
+    assert!(output.contains("src/session/mod.rs:1"));
+    assert!(!output.contains("src/session/tests.rs"));
 }
 
 #[tokio::test]

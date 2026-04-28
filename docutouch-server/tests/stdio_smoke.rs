@@ -394,6 +394,103 @@ async fn server_structural_search_find_and_expand_use_workspace_paths() -> anyho
 }
 
 #[tokio::test]
+async fn server_structural_search_missing_path_returns_pretty_scope_error() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "find",
+                    "pattern": "evaluate_exec_policy($$$ARGS)",
+                    "path": "missing",
+                    "language": "rust"
+                }))),
+                task: None,
+            })
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "missing path should be rendered by structural_search"
+        );
+        let result = result?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("structural_search[find]"));
+        assert!(text.contains("status: scope-error"));
+        assert!(!text.contains(" q1"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_structural_search_accepts_rule_objects_and_rejects_edit_fields()
+-> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let src_dir = temp.path().join("src");
+    std::fs::create_dir_all(&src_dir)?;
+    std::fs::write(
+        src_dir.join("lib.rs"),
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    )?;
+
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(support::workspace_tool_call(temp.path()))
+            .await?;
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "find",
+                    "path": "src",
+                    "rule": {
+                        "id": "policy-call",
+                        "language": "Rust",
+                        "rule": { "pattern": "evaluate_exec_policy($$$ARGS)" }
+                    }
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("structural_search[find] q1"));
+        assert!(text.contains("rule: pattern"));
+        assert!(text.contains("evaluate_exec_policy(ctx, command)"));
+
+        let rejected = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "structural_search".into(),
+                arguments: Some(json_object(json!({
+                    "mode": "find",
+                    "path": "src",
+                    "rule": {
+                        "id": "bad-rule",
+                        "language": "Rust",
+                        "rule": { "pattern": "evaluate_exec_policy($$$ARGS)" },
+                        "fix": "replacement"
+                    }
+                }))),
+                task: None,
+            })
+            .await?;
+        let rejected_text = &rejected.content[0].as_text().unwrap().text;
+        assert!(rejected_text.contains("status: unsupported-rule-field"));
+        assert!(!rejected_text.contains(" q2"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_structural_search_query_numbers_are_connection_local() -> anyhow::Result<()> {
     let first = tempfile::tempdir()?;
     std::fs::create_dir_all(first.path().join("src"))?;

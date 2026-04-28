@@ -290,14 +290,20 @@ fn assert_current_time_surface(output: &str) {
 }
 
 fn input_schema_property_description(tool: &rmcp::model::Tool, property: &str) -> String {
+    input_schema_property_value(tool, property)
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn input_schema_property_value(tool: &rmcp::model::Tool, property: &str) -> Value {
     serde_json::to_value(tool.input_schema.as_ref())
         .expect("input schema json")
         .get("properties")
         .and_then(|properties| properties.get(property))
-        .and_then(|schema| schema.get("description"))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn tool_description(tool: &rmcp::model::Tool) -> String {
@@ -622,6 +628,16 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
         assert!(input_schema_property_description(search_text, "path").contains("pueue-log:<id>"));
         assert!(input_schema_property_description(structural_search, "mode").contains("find"));
         assert!(input_schema_property_description(structural_search, "ref").contains("qN.N"));
+        assert!(
+            input_schema_property_description(structural_search, "rule")
+                .contains("直接传 JSON object")
+        );
+        assert_eq!(
+            input_schema_property_value(structural_search, "rule")
+                .get("type")
+                .and_then(Value::as_str),
+            Some("object")
+        );
 
         Ok(())
     })

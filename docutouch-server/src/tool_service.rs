@@ -18,6 +18,8 @@ use docutouch_core::{
 };
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -187,7 +189,8 @@ pub struct StructuralSearchArgs {
     #[serde(default)]
     pub pattern: Option<String>,
     #[schemars(
-        description = "可选 ast-grep rule object。工具只接受查询字段；包含 fix/rewrite/autofix/apply 等编辑字段时返回 unsupported-rule-field。"
+        schema_with = "structural_search_rule_schema",
+        description = "可选 ast-grep rule object。直接传 JSON object，不要传 JSON/YAML 字符串。工具只接受查询字段；包含 fix/rewrite/autofix/apply 等编辑字段时返回 unsupported-rule-field。"
     )]
     #[serde(default)]
     pub rule: Option<Value>,
@@ -302,6 +305,18 @@ pub enum WaitModeInput {
 pub enum TimestampFieldInput {
     Created,
     Modified,
+}
+
+fn structural_search_rule_schema(_generator: &mut SchemaGenerator) -> Schema {
+    SchemaObject {
+        metadata: Some(Box::new(Metadata {
+            description: Some("可选 ast-grep rule object。直接传 JSON object，不要传 JSON/YAML 字符串。工具只接受查询字段；包含 fix/rewrite/autofix/apply 等编辑字段时返回 unsupported-rule-field。".to_string()),
+            ..Default::default()
+        })),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+        ..Default::default()
+    }
+    .into()
 }
 
 #[derive(Debug)]

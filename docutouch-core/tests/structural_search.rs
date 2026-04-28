@@ -289,6 +289,57 @@ async fn inline_rule_object_find_is_supported() {
 }
 
 #[tokio::test]
+async fn stringified_inline_rule_object_is_accepted() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            pattern: None,
+            rule: Some(json!(
+                r#"{"id":"policy-call","language":"Rust","rule":{"pattern":"evaluate_exec_policy($$$ARGS)"}}"#
+            )),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("stringified inline rule");
+
+    assert!(output.contains("structural_search[find] q1"));
+    assert!(output.contains("rule: pattern"));
+    assert!(output.contains("src/lib.rs:1"));
+}
+
+#[tokio::test]
+async fn malformed_string_rule_returns_parameter_error_without_allocating_query() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            pattern: None,
+            rule: Some(json!("id: policy-call\nlanguage: Rust")),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("parameter error is rendered");
+
+    assert!(output.contains("status: parameter-error"));
+    assert!(output.contains("rule must be a JSON object"));
+    assert!(!output.contains(" q1"));
+    assert!(!output.contains("SerializableRuleConfig"));
+}
+
+#[tokio::test]
 async fn rule_summary_reports_constraints_and_utils() {
     let dir = tempdir().expect("tempdir");
     write_file(

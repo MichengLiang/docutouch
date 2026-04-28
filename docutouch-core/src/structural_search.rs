@@ -148,9 +148,14 @@ impl StructuralSearchSession {
 
     async fn find(
         &mut self,
-        options: StructuralSearchOptions,
+        mut options: StructuralSearchOptions,
         mode: StructuralSearchMode,
     ) -> Result<String, String> {
+        match normalize_rule_input(options.rule.take()) {
+            Ok(rule) => options.rule = rule,
+            Err(message) => return Ok(format_parameter_error(mode, &message)),
+        }
+
         if let Some(rule) = &options.rule
             && contains_unsupported_edit_field(rule)
         {
@@ -1079,6 +1084,29 @@ fn contains_unsupported_edit_field(value: &Value) -> bool {
         }),
         Value::Array(items) => items.iter().any(contains_unsupported_edit_field),
         _ => false,
+    }
+}
+
+fn normalize_rule_input(rule: Option<Value>) -> Result<Option<Value>, String> {
+    let Some(rule) = rule else {
+        return Ok(None);
+    };
+    match rule {
+        Value::Object(_) => Ok(Some(rule)),
+        Value::String(text) => {
+            let parsed: Value = serde_json::from_str(&text).map_err(|_| {
+                "rule must be a JSON object; pass rule directly instead of YAML or an encoded JSON string".to_string()
+            })?;
+            if parsed.is_object() {
+                Ok(Some(parsed))
+            } else {
+                Err("rule must be a JSON object; pass rule directly instead of an encoded JSON scalar or array".to_string())
+            }
+        }
+        _ => Err(
+            "rule must be a JSON object; pass rule directly instead of a string, array, or scalar"
+                .to_string(),
+        ),
     }
 }
 

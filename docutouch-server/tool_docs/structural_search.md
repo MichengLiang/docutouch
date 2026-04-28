@@ -20,4 +20,5 @@
 - 默认输出不是 JSON。
 - 证据行必须可继续交给 `read_file` 使用。
 - 大结果会显示 omitted。
+- `rule` 必须直接传 JSON object；不要把 rule object 编码成 JSON/YAML 字符串。
 - 包含 fix、rewrite、replacement、apply、autofix、transform 等编辑字段的 rule 会返回 `unsupported-rule-field`。

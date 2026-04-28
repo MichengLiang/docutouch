@@ -1,6 +1,6 @@
 {
   "name": "docutouch",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Thin npm launcher for the DocuTouch CLI and MCP server binary",
   "license": "Apache-2.0",
   "type": "commonjs",

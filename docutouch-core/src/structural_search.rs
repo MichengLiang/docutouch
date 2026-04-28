@@ -1,6 +1,6 @@
 use crate::path_display::{display_path, format_scope};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
@@ -128,6 +128,8 @@ struct RawRange {
 #[serde(rename_all = "camelCase")]
 struct RawPosition {
     line: usize,
+    #[serde(default)]
+    column: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -654,9 +656,19 @@ fn display_range(raw: &RawAstGrepMatch) -> (usize, usize, usize) {
     let mut lines = raw.lines.lines();
     let first_line = lines.next().unwrap_or(raw.text.as_str());
     let last_line = raw.lines.lines().last().unwrap_or(first_line);
-    let start_column = first_non_whitespace_column(first_line);
+    let start_column = raw
+        .range
+        .start
+        .column
+        .map(|column| column + 1)
+        .unwrap_or_else(|| first_non_whitespace_column(first_line));
     let end_line = raw.range.end.line + 1;
-    let end_column = last_line.chars().count() + 1;
+    let end_column = raw
+        .range
+        .end
+        .column
+        .map(|column| column + 1)
+        .unwrap_or_else(|| last_line.chars().count() + 1);
     (start_column, end_line, end_column)
 }
 
@@ -991,26 +1003,42 @@ impl LocalSyntaxContext {
             .get(selected_index)
             .map(String::as_str)
             .unwrap_or(item.lines.as_str());
-        let node_kind = infer_node_kind(&item.language, &item.text);
-        let enclosing = infer_enclosing(&item.language, &lines, selected_index);
+        let ast_node = find_ast_node(item);
+        let node_kind = ast_node
+            .as_ref()
+            .map(|node| node.kind.clone())
+            .unwrap_or_else(|| infer_node_kind(&item.language, &item.text));
+        let enclosing = find_enclosing_ast_node(item)
+            .map(|node| format!("{} {}", node.kind, summarize_node_text(&node.text)))
+            .unwrap_or_else(|| infer_enclosing(&item.language, &lines, selected_index));
         let previous = nearest_non_empty_line_before(&lines, selected_index);
         let next = nearest_non_empty_line_after(&lines, selected_index);
         let children = infer_children(&node_kind, &item.text);
         let pattern_hint = infer_pattern_hint(&node_kind, &item.text);
-        let start_column = if item.start_column > 0 {
-            item.start_column
+        let (start_line, start_column, end_line, end_column) = if let Some(node) = &ast_node {
+            (
+                node.start_line,
+                node.start_column,
+                node.end_line,
+                node.end_column,
+            )
         } else {
-            first_non_whitespace_column(selected_line)
-        };
-        let end_line = item.end_line.max(item.line);
-        let end_column = if item.end_column > 0 {
-            item.end_column
-        } else {
-            selected_line.chars().count() + 1
+            let start_column = if item.start_column > 0 {
+                item.start_column
+            } else {
+                first_non_whitespace_column(selected_line)
+            };
+            let end_line = item.end_line.max(item.line);
+            let end_column = if item.end_column > 0 {
+                item.end_column
+            } else {
+                selected_line.chars().count() + 1
+            };
+            (item.line, start_column, end_line, end_column)
         };
         Self {
             node_kind,
-            range: format!("{}:{start_column}-{end_line}:{end_column}", item.line),
+            range: format!("{start_line}:{start_column}-{end_line}:{end_column}"),
             enclosing,
             previous,
             next,
@@ -1018,6 +1046,183 @@ impl LocalSyntaxContext {
             pattern_hint,
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct AstNodeSummary {
+    kind: String,
+    start_line: usize,
+    start_column: usize,
+    end_line: usize,
+    end_column: usize,
+    text: String,
+}
+
+impl AstNodeSummary {
+    fn score(&self) -> usize {
+        let line_span = self.end_line.saturating_sub(self.start_line);
+        let column_span = self.end_column.saturating_sub(self.start_column);
+        line_span * 10_000 + column_span
+    }
+}
+
+fn find_ast_node(item: &StructuralMatch) -> Option<AstNodeSummary> {
+    find_best_ast_node(item, candidate_node_kinds(&item.language), true)
+}
+
+fn find_enclosing_ast_node(item: &StructuralMatch) -> Option<AstNodeSummary> {
+    find_best_ast_node(item, enclosing_node_kinds(&item.language), false)
+}
+
+fn find_best_ast_node(
+    item: &StructuralMatch,
+    kinds: &[&str],
+    prefer_smallest: bool,
+) -> Option<AstNodeSummary> {
+    let path = item.source_path.as_ref()?;
+    let language = normalize_language(&item.language);
+    let mut best: Option<AstNodeSummary> = None;
+    for kind in kinds {
+        for candidate in ast_grep_kind_matches(path, &language, kind) {
+            if !candidate_overlaps_item(&candidate, item) {
+                continue;
+            }
+            let replace = match &best {
+                None => true,
+                Some(current) if prefer_smallest => candidate.score() < current.score(),
+                Some(current) => candidate.score() > current.score(),
+            };
+            if replace {
+                best = Some(candidate);
+            }
+        }
+    }
+    best
+}
+
+fn ast_grep_kind_matches(path: &Path, language: &str, kind: &str) -> Vec<AstNodeSummary> {
+    let rule_language = ast_grep_rule_language(language);
+    let rule = json!({
+        "id": kind,
+        "language": rule_language,
+        "rule": { "kind": kind }
+    });
+    let output = StdCommand::new("ast-grep")
+        .arg("scan")
+        .arg("--inline-rules")
+        .arg(rule.to_string())
+        .arg(path)
+        .arg("--json=compact")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Ok(raw_matches) = serde_json::from_str::<Vec<RawAstGrepMatch>>(stdout.trim()) else {
+        return Vec::new();
+    };
+    raw_matches
+        .into_iter()
+        .map(|raw| {
+            let (start_column, end_line, end_column) = display_range(&raw);
+            AstNodeSummary {
+                kind: kind.to_string(),
+                start_line: raw.range.start.line + 1,
+                start_column,
+                end_line,
+                end_column,
+                text: trim_text(&raw.text),
+            }
+        })
+        .collect()
+}
+
+fn candidate_overlaps_item(candidate: &AstNodeSummary, item: &StructuralMatch) -> bool {
+    let item_start = (item.line, item.start_column.max(1));
+    let item_end = (
+        item.end_line.max(item.line),
+        item.end_column.max(item.start_column.max(1)),
+    );
+    let candidate_start = (candidate.start_line, candidate.start_column);
+    let candidate_end = (candidate.end_line, candidate.end_column);
+    if candidate_start > item_end || candidate_end < item_start {
+        return false;
+    }
+    let item_text = item.text.trim();
+    let candidate_text = candidate.text.trim();
+    item_text.is_empty()
+        || candidate_text == item_text
+        || candidate_text.contains(item_text)
+        || item_text.contains(candidate_text)
+}
+
+fn candidate_node_kinds(language: &str) -> &'static [&'static str] {
+    match normalize_language(language).as_str() {
+        "rust" => &[
+            "call_expression",
+            "function_item",
+            "impl_item",
+            "mod_item",
+            "struct_item",
+            "enum_item",
+            "trait_item",
+            "match_arm",
+            "macro_invocation",
+        ],
+        "typescript" | "javascript" => &[
+            "call_expression",
+            "function_declaration",
+            "method_definition",
+            "class_declaration",
+            "lexical_declaration",
+        ],
+        "python" => &["call", "function_definition", "class_definition"],
+        _ => &[],
+    }
+}
+
+fn enclosing_node_kinds(language: &str) -> &'static [&'static str] {
+    match normalize_language(language).as_str() {
+        "rust" => &["function_item", "impl_item", "mod_item", "trait_item"],
+        "typescript" | "javascript" => &[
+            "function_declaration",
+            "method_definition",
+            "class_declaration",
+        ],
+        "python" => &["function_definition", "class_definition"],
+        _ => &[],
+    }
+}
+
+fn ast_grep_rule_language(language: &str) -> &'static str {
+    match normalize_language(language).as_str() {
+        "rust" => "Rust",
+        "typescript" => "TypeScript",
+        "javascript" => "JavaScript",
+        "python" => "Python",
+        "go" => "Go",
+        "java" => "Java",
+        "c" => "C",
+        "cpp" => "Cpp",
+        "csharp" => "CSharp",
+        _ => "Rust",
+    }
+}
+
+fn summarize_node_text(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| {
+            line.split_once('{')
+                .map(|(prefix, _)| prefix.trim())
+                .unwrap_or(line)
+                .to_string()
+        })
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn append_capture_lines(out: &mut String, captures: &CaptureSummary, indent: &str) {
@@ -1854,5 +2059,183 @@ fn resolve_query_path(options: &StructuralSearchOptions, path_text: &str) -> Pat
         base.join(path)
     } else {
         path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn match_item(language: &str, text: &str) -> StructuralMatch {
+        StructuralMatch {
+            source_path: None,
+            file: "src/lib.rs".to_string(),
+            line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: text.chars().count() + 1,
+            text: text.to_string(),
+            lines: text.to_string(),
+            language: language.to_string(),
+            captures: CaptureSummary::default(),
+        }
+    }
+
+    #[test]
+    fn structural_search_language_tables_cover_supported_families() {
+        assert!(candidate_node_kinds("rust").contains(&"call_expression"));
+        assert!(candidate_node_kinds("typescript").contains(&"function_declaration"));
+        assert!(candidate_node_kinds("javascript").contains(&"class_declaration"));
+        assert!(candidate_node_kinds("python").contains(&"function_definition"));
+        assert!(candidate_node_kinds("unknown").is_empty());
+
+        assert!(enclosing_node_kinds("rust").contains(&"function_item"));
+        assert!(enclosing_node_kinds("typescript").contains(&"method_definition"));
+        assert!(enclosing_node_kinds("javascript").contains(&"class_declaration"));
+        assert!(enclosing_node_kinds("python").contains(&"class_definition"));
+        assert!(enclosing_node_kinds("unknown").is_empty());
+
+        assert_eq!(ast_grep_rule_language("rust"), "Rust");
+        assert_eq!(ast_grep_rule_language("typescript"), "TypeScript");
+        assert_eq!(ast_grep_rule_language("javascript"), "JavaScript");
+        assert_eq!(ast_grep_rule_language("python"), "Python");
+        assert_eq!(ast_grep_rule_language("go"), "Go");
+        assert_eq!(ast_grep_rule_language("java"), "Java");
+        assert_eq!(ast_grep_rule_language("c"), "C");
+        assert_eq!(ast_grep_rule_language("cpp"), "Cpp");
+        assert_eq!(ast_grep_rule_language("csharp"), "CSharp");
+        assert_eq!(ast_grep_rule_language("unknown"), "Rust");
+    }
+
+    #[test]
+    fn ast_node_overlap_prefers_text_and_range_intersection() {
+        let item = match_item("rust", "evaluate_exec_policy(ctx, command)");
+        let matching = AstNodeSummary {
+            kind: "call_expression".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 35,
+            text: "evaluate_exec_policy(ctx, command)".to_string(),
+        };
+        let non_overlapping = AstNodeSummary {
+            kind: "call_expression".to_string(),
+            start_line: 3,
+            start_column: 1,
+            end_line: 3,
+            end_column: 10,
+            text: "finish()".to_string(),
+        };
+        let wrong_text = AstNodeSummary {
+            kind: "call_expression".to_string(),
+            start_line: 1,
+            start_column: 1,
+            end_line: 1,
+            end_column: 10,
+            text: "finish()".to_string(),
+        };
+
+        assert!(candidate_overlaps_item(&matching, &item));
+        assert!(!candidate_overlaps_item(&non_overlapping, &item));
+        assert!(!candidate_overlaps_item(&wrong_text, &item));
+        assert_eq!(matching.score(), 34);
+    }
+
+    #[test]
+    fn display_range_uses_columns_when_ast_grep_provides_them() {
+        let raw = RawAstGrepMatch {
+            text: "call()".to_string(),
+            range: RawRange {
+                start: RawPosition {
+                    line: 2,
+                    column: Some(4),
+                },
+                end: RawPosition {
+                    line: 2,
+                    column: Some(10),
+                },
+            },
+            file: "src/lib.rs".to_string(),
+            lines: "    call();".to_string(),
+            language: "Rust".to_string(),
+            meta_variables: None,
+        };
+        assert_eq!(display_range(&raw), (5, 3, 11));
+
+        let fallback = RawAstGrepMatch {
+            range: RawRange {
+                start: RawPosition {
+                    line: 0,
+                    column: None,
+                },
+                end: RawPosition {
+                    line: 0,
+                    column: None,
+                },
+            },
+            ..raw
+        };
+        assert_eq!(display_range(&fallback), (5, 1, 12));
+    }
+
+    #[test]
+    fn local_context_falls_back_without_source_backing() {
+        let context = LocalSyntaxContext::build(&match_item("rust", "finish()"));
+        assert_eq!(context.node_kind, "call_expression");
+        assert_eq!(context.range, "1:1-1:9");
+        assert_eq!(context.children, "arguments: ");
+        assert_eq!(context.pattern_hint, "finish($$$ARGS)");
+
+        assert_eq!(infer_node_kind("rust", "impl Handler {}"), "impl_item");
+        assert_eq!(infer_node_kind("rust", "pub mod commands;"), "mod_item");
+        assert_eq!(infer_node_kind("rust", "Ok(_) => {}"), "match_arm");
+        assert_eq!(
+            infer_node_kind("typescript", "function run() {}"),
+            "function_declaration"
+        );
+        assert_eq!(
+            infer_node_kind("python", "def run(): pass"),
+            "function_definition"
+        );
+        assert_eq!(infer_node_kind("unknown", "value"), "syntax_node");
+    }
+
+    #[test]
+    fn enclosing_fallbacks_cover_common_language_items() {
+        let rust_lines = vec![
+            "impl Handler {".to_string(),
+            "    pub fn run(&self) {".to_string(),
+            "        finish();".to_string(),
+        ];
+        assert_eq!(
+            infer_enclosing("rust", &rust_lines, 2),
+            "function_item pub fn run(&self)"
+        );
+        assert_eq!(
+            infer_enclosing("rust", &rust_lines, 0),
+            "impl_item impl Handler"
+        );
+
+        let ts_lines = vec!["function run() {".to_string(), "  finish();".to_string()];
+        assert_eq!(
+            infer_enclosing("typescript", &ts_lines, 1),
+            "function_declaration function run()"
+        );
+
+        let py_lines = vec!["def run():".to_string(), "    finish()".to_string()];
+        assert_eq!(
+            infer_enclosing("python", &py_lines, 1),
+            "function_definition def run()"
+        );
+        assert_eq!(
+            infer_enclosing("unknown", &["value".to_string()], 0),
+            "none"
+        );
+    }
+
+    #[test]
+    fn ast_kind_query_failure_returns_no_nodes() {
+        let missing = PathBuf::from("definitely/missing/path.rs");
+        assert!(ast_grep_kind_matches(&missing, "rust", "call_expression").is_empty());
     }
 }

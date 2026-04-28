@@ -22,9 +22,20 @@ fn find_options(root: &std::path::Path, pattern: &str) -> StructuralSearchOption
         display_base_dir: Some(root.to_path_buf()),
         language: Some("rust".to_string()),
         include_tests: true,
-        context: vec!["captures".to_string()],
+        context: Vec::new(),
         limit: Some(8),
         view: StructuralSearchView::Preview,
+    }
+}
+
+fn find_options_for_path(
+    root: &std::path::Path,
+    path: &str,
+    pattern: &str,
+) -> StructuralSearchOptions {
+    StructuralSearchOptions {
+        search_paths: vec![root.join(path)],
+        ..find_options(root, pattern)
     }
 }
 
@@ -77,6 +88,95 @@ pub fn run() {
 }
 
 #[tokio::test]
+async fn default_output_is_pretty_text_not_raw_ast_grep_json() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+
+    assert!(output.starts_with("structural_search[find] q1\n"));
+    assert!(!output.trim_start().starts_with('['));
+    assert!(!output.trim_start().starts_with('{'));
+    assert!(!output.contains("\"text\""));
+    assert!(!output.contains("\"range\""));
+    assert!(!output.contains("\"metaVariables\""));
+}
+
+#[tokio::test]
+async fn successful_queries_allocate_q_numbers_sequentially() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { first(); second(); third(); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let first = session
+        .search(find_options(dir.path(), "first()"))
+        .await
+        .expect("first");
+    let second = session
+        .search(find_options(dir.path(), "second()"))
+        .await
+        .expect("second");
+    let third = session
+        .search(find_options(dir.path(), "third()"))
+        .await
+        .expect("third");
+
+    assert!(first.starts_with("structural_search[find] q1\n"));
+    assert!(second.starts_with("structural_search[find] q2\n"));
+    assert!(third.starts_with("structural_search[find] q3\n"));
+}
+
+#[tokio::test]
+async fn structural_search_sessions_are_connection_local() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+    write_file(dir.path(), "src/other.rs", "pub fn run() { finish(); }\n");
+
+    let mut first_connection = StructuralSearchSession::default();
+    let mut second_connection = StructuralSearchSession::default();
+
+    let first = first_connection
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("first connection find");
+    let second = second_connection
+        .search(find_options(dir.path(), "finish()"))
+        .await
+        .expect("second connection find");
+
+    assert!(first.starts_with("structural_search[find] q1\n"));
+    assert!(second.starts_with("structural_search[find] q1\n"));
+
+    let expanded = first_connection
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("first connection expand");
+    assert!(expanded.contains("structural_search[expand] q2"));
+    assert!(expanded.contains("evaluate_exec_policy(ctx, command)"));
+    assert!(!expanded.contains("finish()"));
+}
+
+#[tokio::test]
 async fn expand_uses_recent_query_and_invalid_ref_does_not_pollute_recent_query() {
     let dir = tempdir().expect("tempdir");
     write_file(
@@ -120,6 +220,64 @@ pub fn run() {
 }
 
 #[tokio::test]
+async fn expand_without_recent_query_is_invalid_ref_and_allocates_no_query() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let invalid = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("invalid ref");
+    assert!(invalid.contains("status: invalid-ref"));
+    assert!(!invalid.contains(" q1"));
+
+    let find = session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+    assert!(find.starts_with("structural_search[find] q1\n"));
+}
+
+#[tokio::test]
+async fn expand_truncates_long_captures_and_omits_extra_capture_entries() {
+    let dir = tempdir().expect("tempdir");
+    let long_literal = "x".repeat(160);
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        &format!("pub fn run() {{ wrap(\"{long_literal}\", second, third, fourth, fifth); }}\n"),
+    );
+
+    let mut session = StructuralSearchSession::default();
+    session
+        .search(find_options(dir.path(), "wrap($A, $B, $C, $D, $E)"))
+        .await
+        .expect("find");
+    let expanded = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("expand");
+
+    assert!(expanded.contains("$A = \""));
+    assert!(expanded.contains("chars omitted"));
+    assert!(expanded.contains("captures not shown"));
+    assert!(!expanded.contains(&long_literal));
+}
+
+#[tokio::test]
 async fn expand_respects_preview_limit_and_reports_hidden_matches() {
     let dir = tempdir().expect("tempdir");
     for index in 0..5 {
@@ -150,6 +308,48 @@ async fn expand_respects_preview_limit_and_reports_hidden_matches() {
     assert!(expanded.contains("omitted:"));
     assert!(expanded.contains("3 matches not shown"));
     assert!(!expanded.contains("[3]"));
+}
+
+#[tokio::test]
+async fn full_view_is_budgeted_and_limit_above_max_is_parameter_error() {
+    let dir = tempdir().expect("tempdir");
+    for index in 0..70 {
+        write_file(
+            dir.path(),
+            &format!("src/policy_{index}.rs"),
+            &format!("pub fn run_{index}() {{ evaluate_exec_policy(ctx, command_{index}); }}\n"),
+        );
+    }
+
+    let mut session = StructuralSearchSession::default();
+    let bad_limit = session
+        .search(StructuralSearchOptions {
+            limit: Some(1000),
+            ..find_options(dir.path(), "evaluate_exec_policy($$$ARGS)")
+        })
+        .await
+        .expect("bad limit");
+    assert!(bad_limit.contains("status: parameter-error"));
+    assert!(bad_limit.contains("limit must be at most"));
+    assert!(!bad_limit.contains(" q1"));
+
+    session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+    let expanded = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            view: StructuralSearchView::Full,
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("full expand");
+
+    assert!(expanded.contains("matches: 64 displayed, 70 total"));
+    assert!(expanded.contains("6 matches not shown"));
+    assert!(!expanded.contains("[65]"));
 }
 
 #[tokio::test]
@@ -230,6 +430,42 @@ async fn include_tests_false_excludes_rust_tests_module_files() {
     assert!(output.contains("tests excluded"));
     assert!(output.contains("src/session/mod.rs:1"));
     assert!(!output.contains("src/session/tests.rs"));
+}
+
+#[tokio::test]
+async fn groups_include_production_tests_fixtures_and_generated_families() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn prod() { evaluate_exec_policy(ctx, prod); }\n",
+    );
+    write_file(
+        dir.path(),
+        "tests/policy_tests.rs",
+        "fn test_policy() { evaluate_exec_policy(ctx, test); }\n",
+    );
+    write_file(
+        dir.path(),
+        "fixtures/policy_fixture.rs",
+        "pub fn fixture() { evaluate_exec_policy(ctx, fixture); }\n",
+    );
+    write_file(
+        dir.path(),
+        "src/generated/policy.rs",
+        "pub fn generated() { evaluate_exec_policy(ctx, generated); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+
+    assert!(output.contains("[1] production matches"));
+    assert!(output.contains("[2] test matches"));
+    assert!(output.contains("[3] fixture matches"));
+    assert!(output.contains("[4] generated matches"));
 }
 
 #[tokio::test]
@@ -421,6 +657,39 @@ async fn invalid_pattern_returns_status_without_allocating_query() {
 }
 
 #[tokio::test]
+async fn invalid_pattern_does_not_pollute_recent_query() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+    let invalid = session
+        .search(find_options(dir.path(), "match $POLICY { $$$ARMS"))
+        .await
+        .expect("invalid pattern");
+    assert!(invalid.contains("status: invalid-pattern"));
+    assert!(!invalid.contains(" q2"));
+
+    let expanded = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Expand,
+            reference: Some("1".to_string()),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("expand");
+    assert!(expanded.contains("structural_search[expand] q2"));
+    assert!(expanded.contains("from: q1.[1]"));
+}
+
+#[tokio::test]
 async fn parse_partial_reports_missing_language_coverage_and_allocates_query() {
     let dir = tempdir().expect("tempdir");
     write_file(
@@ -477,6 +746,59 @@ async fn around_reports_source_node_and_captures() {
 }
 
 #[tokio::test]
+async fn around_reports_real_local_structure_and_honors_context_filter() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() {\n    prepare();\n    evaluate_exec_policy(ctx, command);\n    finish();\n}\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+    let output = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Around,
+            reference: Some("1".to_string()),
+            context: vec![
+                "enclosing".to_string(),
+                "siblings".to_string(),
+                "children".to_string(),
+                "captures".to_string(),
+            ],
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("around");
+
+    assert!(output.contains("item: function_item pub fn run"));
+    assert!(output.contains("kind: call_expression"));
+    assert!(output.contains("range: 3:5-3:"));
+    assert!(output.contains("previous: prepare();"));
+    assert!(output.contains("next: finish();"));
+    assert!(output.contains("arguments: ctx, command"));
+    assert!(!output.contains("line_context"));
+    assert!(!output.contains("backend-dependent"));
+
+    let captures_only = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::Around,
+            reference: Some("q1.1".to_string()),
+            context: vec!["captures".to_string()],
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("around captures only");
+    assert!(captures_only.contains("Captures"));
+    assert!(!captures_only.contains("Enclosing"));
+    assert!(!captures_only.contains("Siblings"));
+    assert!(!captures_only.contains("Children"));
+}
+
+#[tokio::test]
 async fn explain_ast_reports_path_line_local_tree_surface() {
     let dir = tempdir().expect("tempdir");
     write_file(
@@ -503,6 +825,56 @@ async fn explain_ast_reports_path_line_local_tree_surface() {
 }
 
 #[tokio::test]
+async fn explain_ast_reports_real_node_kind_range_tree_and_candidate_pattern() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() {\n    evaluate_exec_policy(ctx, command);\n}\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::ExplainAst,
+            query: Some("src/lib.rs:2".to_string()),
+            ..find_options(dir.path(), "unused")
+        })
+        .await
+        .expect("explain");
+
+    assert!(output.contains("node kind: call_expression"));
+    assert!(output.contains("range: 2:5-2:"));
+    assert!(output.contains("function_item"));
+    assert!(output.contains("call_expression evaluate_exec_policy(ctx, command)"));
+    assert!(output.contains("evaluate_exec_policy($$$ARGS)"));
+    assert!(!output.contains("line_context"));
+}
+
+#[tokio::test]
+async fn explain_ast_accepts_path_plus_query_line_number() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() {\n    evaluate_exec_policy(ctx, command);\n}\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::ExplainAst,
+            query: Some("2".to_string()),
+            ..find_options_for_path(dir.path(), "src/lib.rs", "unused")
+        })
+        .await
+        .expect("explain path plus line");
+
+    assert!(output.contains("source: src/lib.rs:2"));
+    assert!(output.contains("node kind: call_expression"));
+}
+
+#[tokio::test]
 async fn rule_test_reports_matched_status() {
     let dir = tempdir().expect("tempdir");
     write_file(
@@ -526,6 +898,92 @@ async fn rule_test_reports_matched_status() {
 }
 
 #[tokio::test]
+async fn rule_test_uses_ref_as_small_test_source() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() {\n    prepare();\n    evaluate_exec_policy(ctx, command);\n    finish();\n}\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    session
+        .search(find_options(dir.path(), "evaluate_exec_policy($$$ARGS)"))
+        .await
+        .expect("find");
+
+    let matched = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::RuleTest,
+            reference: Some("q1.1".to_string()),
+            ..find_options(dir.path(), "evaluate_exec_policy($$$ARGS)")
+        })
+        .await
+        .expect("rule test ref matched");
+    assert!(matched.contains("structural_search[rule_test] q2"));
+    assert!(matched.contains("test source: q1.[1] src/lib.rs:3"));
+    assert!(matched.contains("status: matched"));
+
+    let no_match = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::RuleTest,
+            reference: Some("q1.1".to_string()),
+            ..find_options(dir.path(), "finish()")
+        })
+        .await
+        .expect("rule test ref no match");
+    assert!(no_match.contains("structural_search[rule_test] q3"));
+    assert!(no_match.contains("status: no-matches"));
+}
+
+#[tokio::test]
+async fn rule_test_uses_path_line_as_small_test_source() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() {\n    prepare();\n    evaluate_exec_policy(ctx, command);\n}\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            mode: StructuralSearchMode::RuleTest,
+            query: Some("src/lib.rs:3".to_string()),
+            ..find_options(dir.path(), "prepare()")
+        })
+        .await
+        .expect("rule test path line");
+
+    assert!(output.contains("structural_search[rule_test] q1"));
+    assert!(output.contains("test source: src/lib.rs:3"));
+    assert!(output.contains("status: no-matches"));
+}
+
+#[tokio::test]
+async fn unsupported_context_returns_parameter_error_without_allocating_query() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { evaluate_exec_policy(ctx, command); }\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let output = session
+        .search(StructuralSearchOptions {
+            context: vec!["captures".to_string(), "unknown_context".to_string()],
+            ..find_options(dir.path(), "evaluate_exec_policy($$$ARGS)")
+        })
+        .await
+        .expect("bad context");
+
+    assert!(output.contains("status: parameter-error"));
+    assert!(output.contains("unsupported context"));
+    assert!(!output.contains(" q1"));
+}
+
+#[tokio::test]
 async fn multi_language_directory_without_language_returns_ambiguous_language() {
     let dir = tempdir().expect("tempdir");
     write_file(dir.path(), "src/lib.rs", "pub fn run() {}\n");
@@ -541,9 +999,73 @@ async fn multi_language_directory_without_language_returns_ambiguous_language() 
         .expect("ambiguous");
 
     assert!(output.contains("status: ambiguous-language"));
-    assert!(output.contains("rust"));
-    assert!(output.contains("typescript"));
+    assert!(output.contains("rust: 1 files"));
+    assert!(output.contains("typescript: 1 files"));
     assert!(!output.contains(" q1"));
+
+    let narrowed = session
+        .search(StructuralSearchOptions {
+            language: None,
+            ..find_options_for_path(dir.path(), "src/lib.rs", "run($$$ARGS)")
+        })
+        .await
+        .expect("narrowed language inference");
+    assert!(narrowed.contains("structural_search[find] q1"));
+    assert!(narrowed.contains("language: rust"));
+
+    let explicit = session
+        .search(StructuralSearchOptions {
+            language: Some("typescript".to_string()),
+            pattern: Some("function $NAME($$$ARGS) { $$$BODY }".to_string()),
+            ..find_options_for_path(dir.path(), "src/app.ts", "unused")
+        })
+        .await
+        .expect("explicit language");
+    assert!(explicit.contains("structural_search[find] q2"));
+    assert!(explicit.contains("language: typescript"));
+}
+
+#[tokio::test]
+async fn typescript_and_python_fixtures_support_patterns_and_test_filtering() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "web/app.ts",
+        "function run(value) { evaluateExecPolicy(value); }\n",
+    );
+    write_file(
+        dir.path(),
+        "web/app.test.ts",
+        "function testRun(value) { evaluateExecPolicy(value); }\n",
+    );
+    write_file(
+        dir.path(),
+        "py/app.py",
+        "def run(value):\n    evaluate_exec_policy(value)\n",
+    );
+
+    let mut session = StructuralSearchSession::default();
+    let ts = session
+        .search(StructuralSearchOptions {
+            language: Some("typescript".to_string()),
+            include_tests: false,
+            ..find_options_for_path(dir.path(), "web", "function $NAME($$$ARGS) { $$$BODY }")
+        })
+        .await
+        .expect("typescript find");
+    assert!(ts.contains("structural_search[find] q1"));
+    assert!(ts.contains("web/app.ts:1"));
+    assert!(!ts.contains("web/app.test.ts"));
+
+    let py = session
+        .search(StructuralSearchOptions {
+            language: Some("python".to_string()),
+            ..find_options_for_path(dir.path(), "py", "def $NAME($$$ARGS): $$$BODY")
+        })
+        .await
+        .expect("python find");
+    assert!(py.contains("structural_search[find] q2"));
+    assert!(py.contains("py/app.py:1"));
 }
 
 #[tokio::test]
@@ -764,6 +1286,30 @@ async fn relational_rule_fixtures_each_match_and_report_relation_summary() {
         assert!(output.contains(expected_text), "{output}");
         assert!(!output.contains("status: no-matches"), "{output}");
     }
+}
+
+#[tokio::test]
+async fn relational_rule_output_includes_structure_fact_summary() {
+    let dir = tempdir().expect("tempdir");
+    write_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub fn run() { prepare(); evaluate_exec_policy(ctx, command); finish(); }\n",
+    );
+
+    let (_session, output) = run_rule(
+        dir.path(),
+        json!({"id":"inside-call","language":"Rust","rule":{"pattern":"evaluate_exec_policy($$$ARGS)","inside":{"kind":"function_item","stopBy":"end"}}}),
+    )
+    .await;
+    assert!(output.contains("context: call_expression inside function_item"));
+
+    let (_session, output) = run_rule(
+        dir.path(),
+        json!({"id":"has-call","language":"Rust","rule":{"kind":"function_item","has":{"pattern":"evaluate_exec_policy($$$ARGS)","stopBy":"end"}}}),
+    )
+    .await;
+    assert!(output.contains("relation: function_item has evaluate_exec_policy($$$ARGS)"));
 }
 
 #[tokio::test]

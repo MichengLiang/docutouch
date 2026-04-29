@@ -86,7 +86,7 @@ fn flush_segment(segments: &mut Vec<Segment>, kind: SegmentKind, current: &mut S
     });
 }
 
-fn parse_osc_payload<'a>(raw: &'a str, start: usize) -> Option<(&'a str, usize)> {
+fn parse_osc_payload(raw: &str, start: usize) -> Option<(&str, usize)> {
     let bytes = raw.as_bytes();
     if bytes.get(start + 1) != Some(&b']') {
         return None;

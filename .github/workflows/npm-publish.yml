@@ -6,6 +6,9 @@ on:
       - published
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -23,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Verify release tag matches npm package version
@@ -37,4 +40,3 @@ jobs:
       - name: Publish npm package with provenance
         working-directory: npm
         run: npm publish --provenance --access public
-

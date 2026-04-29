@@ -102,10 +102,9 @@ impl ResolvedOutputMode {
         match self {
             Self::RawText => SearchTextSurfaceKind::RawText,
             Self::RawJson => SearchTextSurfaceKind::RawJson,
-            Self::Grouped
-            | Self::GroupedContext { .. }
-            | Self::Counts(_)
-            | Self::Files(_) => SearchTextSurfaceKind::StructuredText,
+            Self::Grouped | Self::GroupedContext { .. } | Self::Counts(_) | Self::Files(_) => {
+                SearchTextSurfaceKind::StructuredText
+            }
         }
     }
 
@@ -278,9 +277,9 @@ impl ParsedRgArgs {
 
     fn has_output_conflict(&self) -> bool {
         let has_count = self.has_count || self.has_count_matches;
-        let has_file_surface = self.has_files_with_matches || self.has_files_without_match || self.has_files;
-        (has_count && self.context_requested())
-            || (has_count && has_file_surface)
+        let has_file_surface =
+            self.has_files_with_matches || self.has_files_without_match || self.has_files;
+        (has_file_surface || self.context_requested()) && has_count
             || (self.context_requested() && has_file_surface)
     }
 
@@ -485,7 +484,8 @@ async fn execute_search(
 ) -> Result<SearchExecution, String> {
     match query_mode {
         SearchTextQueryMode::Literal => {
-            let output = run_search_text_rg(query, search_paths, parsed, resolved_mode, true).await?;
+            let output =
+                run_search_text_rg(query, search_paths, parsed, resolved_mode, true).await?;
             Ok(SearchExecution {
                 output,
                 interpretation: QueryInterpretation::Literal,
@@ -502,32 +502,30 @@ async fn execute_search(
                 mode: resolved_mode,
             })
         }
-        SearchTextQueryMode::Auto => match run_search_text_rg(
-            query,
-            search_paths,
-            parsed,
-            resolved_mode,
-            false,
-        )
-        .await
-        {
-            Ok(output) => Ok(SearchExecution {
-                output,
-                interpretation: QueryInterpretation::Regex,
-                mode: resolved_mode,
-            }),
-            Err(error)
-                if is_regex_parse_error(&error) && !parsed.explicit_regex_requested && !query.is_empty() =>
-            {
-                let output = run_search_text_rg(query, search_paths, parsed, resolved_mode, true).await?;
-                Ok(SearchExecution {
+        SearchTextQueryMode::Auto => {
+            match run_search_text_rg(query, search_paths, parsed, resolved_mode, false).await {
+                Ok(output) => Ok(SearchExecution {
                     output,
-                    interpretation: QueryInterpretation::LiteralFallback,
+                    interpretation: QueryInterpretation::Regex,
                     mode: resolved_mode,
-                })
+                }),
+                Err(error)
+                    if is_regex_parse_error(&error)
+                        && !parsed.explicit_regex_requested
+                        && !query.is_empty() =>
+                {
+                    let output =
+                        run_search_text_rg(query, search_paths, parsed, resolved_mode, true)
+                            .await?;
+                    Ok(SearchExecution {
+                        output,
+                        interpretation: QueryInterpretation::LiteralFallback,
+                        mode: resolved_mode,
+                    })
+                }
+                Err(error) => Err(map_regex_error(query, error)),
             }
-            Err(error) => Err(map_regex_error(query, error)),
-        },
+        }
     }
 }
 
@@ -680,7 +678,10 @@ fn parse_search_text_output(
         }
         let value: Value = serde_json::from_str(raw_line)
             .map_err(|err| format!("Failed to parse rg JSON output: {err}"))?;
-        let event_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+        let event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if event_type != "match" && event_type != "context" {
             continue;
         }
@@ -778,6 +779,7 @@ fn format_grouped_result(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_grouped_context_result(
     query: &str,
     scope: &str,
@@ -802,6 +804,7 @@ fn format_grouped_context_result(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_grouped_like_result(
     mode: ResolvedOutputMode,
     query: &str,
@@ -813,7 +816,10 @@ fn format_grouped_like_result(
     interpretation: QueryInterpretation,
     context_window: Option<(usize, usize)>,
 ) -> String {
-    let matched_lines = groups.iter().map(|group| group.matched_lines).sum::<usize>();
+    let matched_lines = groups
+        .iter()
+        .map(|group| group.matched_lines)
+        .sum::<usize>();
     let mut lines = vec![format!("search_text[{}]:", mode.label(view))];
     if !query.is_empty() {
         lines.push(format!("query: {query}"));
@@ -866,8 +872,16 @@ fn format_grouped_like_result(
         if index > 0 {
             lines.push(String::new());
         }
-        let line_word = if group.matched_lines == 1 { "line" } else { "lines" };
-        let hit_word = if group.total_hits == 1 { "match" } else { "matches" };
+        let line_word = if group.matched_lines == 1 {
+            "line"
+        } else {
+            "lines"
+        };
+        let hit_word = if group.total_hits == 1 {
+            "match"
+        } else {
+            "matches"
+        };
         lines.push(format!(
             "[{}] {} ({} {}, {} {})",
             index + 1,
@@ -878,7 +892,11 @@ fn format_grouped_like_result(
             hit_word
         ));
         let rendered_entries = if view == SearchTextView::Preview {
-            group.entries.iter().take(per_file_limit).collect::<Vec<_>>()
+            group
+                .entries
+                .iter()
+                .take(per_file_limit)
+                .collect::<Vec<_>>()
         } else {
             group.entries.iter().collect::<Vec<_>>()
         };
@@ -892,7 +910,12 @@ fn format_grouped_like_result(
             .max(1);
         rendered_entries_total += rendered_entries.len();
         for entry in rendered_entries {
-            render_group_entry(&mut lines, entry, line_number_width, matches!(mode, ResolvedOutputMode::GroupedContext { .. }));
+            render_group_entry(
+                &mut lines,
+                entry,
+                line_number_width,
+                matches!(mode, ResolvedOutputMode::GroupedContext { .. }),
+            );
         }
         if view == SearchTextView::Preview && group.entries.len() > per_file_limit {
             lines.push(format!(
@@ -945,7 +968,10 @@ fn render_group_entry(
         format!("  {line_number:>width$} | ", width = width)
     };
     if entry.hit_count > 1 {
-        lines.push(format!("{line_prefix}{}  [{} hits]", entry.text, entry.hit_count));
+        lines.push(format!(
+            "{line_prefix}{}  [{} hits]",
+            entry.text, entry.hit_count
+        ));
     } else {
         lines.push(format!("{line_prefix}{}", entry.text));
     }
@@ -960,7 +986,10 @@ fn format_counts_result(
     interpretation: QueryInterpretation,
     count_kind: CountSurfaceKind,
 ) -> String {
-    let matched_lines = groups.iter().map(|group| group.matched_lines).sum::<usize>();
+    let matched_lines = groups
+        .iter()
+        .map(|group| group.matched_lines)
+        .sum::<usize>();
     let mut lines = vec!["search_text[counts]:".to_string()];
     if !query.is_empty() {
         lines.push(format!("query: {query}"));
@@ -994,13 +1023,27 @@ fn format_counts_result(
         };
         let unit = match count_kind {
             CountSurfaceKind::MatchedLines => {
-                if value == 1 { "matched line" } else { "matched lines" }
+                if value == 1 {
+                    "matched line"
+                } else {
+                    "matched lines"
+                }
             }
             CountSurfaceKind::Matches => {
-                if value == 1 { "match" } else { "matches" }
+                if value == 1 {
+                    "match"
+                } else {
+                    "matches"
+                }
             }
         };
-        lines.push(format!("[{}] {} | {} {}", index + 1, group.path, value, unit));
+        lines.push(format!(
+            "[{}] {} | {} {}",
+            index + 1,
+            group.path,
+            value,
+            unit
+        ));
     }
     lines.join("\n")
 }
@@ -1060,7 +1103,8 @@ impl SearchTextView {
 }
 
 fn is_regex_parse_error(error: &str) -> bool {
-    error.contains("regex parse error") || error.contains("the literal \"\\n\" is not allowed in a regex")
+    error.contains("regex parse error")
+        || error.contains("the literal \"\\n\" is not allowed in a regex")
 }
 
 fn map_regex_error(query: &str, error: String) -> String {
@@ -1156,8 +1200,16 @@ mod tests {
     fn invalid_context_values_are_not_treated_as_valid_context_requests() {
         let parsed = ParsedRgArgs::parse("-C nope").expect("parse rg args");
         assert!(!parsed.context_requested());
-        assert!(parsed.structured_tokens(ResolvedOutputMode::Grouped).contains(&"-C".to_string()));
-        assert!(parsed.structured_tokens(ResolvedOutputMode::Grouped).contains(&"nope".to_string()));
+        assert!(
+            parsed
+                .structured_tokens(ResolvedOutputMode::Grouped)
+                .contains(&"-C".to_string())
+        );
+        assert!(
+            parsed
+                .structured_tokens(ResolvedOutputMode::Grouped)
+                .contains(&"nope".to_string())
+        );
     }
 
     #[test]

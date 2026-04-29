@@ -628,7 +628,10 @@ fn make_search_blackbox_fixture(temp: &TempDir) -> anyhow::Result<()> {
         "before context\nalpha\nafter context\n",
     )?;
     std::fs::write(temp.path().join("src").join("three.txt"), "no hits here\n")?;
-    std::fs::write(temp.path().join("docs").join("guide.md"), "{ref:doc}\nwarning[\n")?;
+    std::fs::write(
+        temp.path().join("docs").join("guide.md"),
+        "{ref:doc}\nwarning[\n",
+    )?;
     Ok(())
 }
 
@@ -736,7 +739,11 @@ async fn cli_search_auto_literal_fallback_matches_mcp_output() -> anyhow::Result
     )
     .await?;
 
-    let cli_output = run_cli(cli_temp.path(), &["search", "{ref:", ".", "--view", "preview"], None)?;
+    let cli_output = run_cli(
+        cli_temp.path(),
+        &["search", "{ref:", ".", "--view", "preview"],
+        None,
+    )?;
     assert!(cli_output.status.success());
     assert_eq!(utf8(&cli_output.stdout), server_output);
     assert!(utf8(&cli_output.stdout).contains("query_interpretation: literal_fallback"));
@@ -795,13 +802,23 @@ async fn cli_search_queryless_files_raw_text_matches_mcp_output() -> anyhow::Res
 
     let cli_output = run_cli(
         cli_temp.path(),
-        &["search", "", ".", "--rg-args", "--files", "--output-mode", "raw_text"],
+        &[
+            "search",
+            "",
+            ".",
+            "--rg-args",
+            "--files",
+            "--output-mode",
+            "raw_text",
+        ],
         None,
     )?;
     assert!(cli_output.status.success());
     let cli_text = utf8(&cli_output.stdout);
     let cli_lines = cli_text.lines().collect::<std::collections::BTreeSet<_>>();
-    let server_lines = server_output.lines().collect::<std::collections::BTreeSet<_>>();
+    let server_lines = server_output
+        .lines()
+        .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(cli_lines, server_lines);
     assert!(cli_text.contains("src/one.txt"));
     assert!(!cli_text.contains(cli_temp.path().to_string_lossy().as_ref()));
@@ -1735,7 +1752,7 @@ async fn cli_patch_move_write_failure_matches_mcp_inline_diagnostics() -> anyhow
         normalize_patch_failure_text(&cli_stderr, cli_temp.path()),
         normalize_patch_failure_text(&server_error, server_temp.path())
     );
-    assert!(cli_stderr.contains("TARGET_WRITE_ERROR"));
+    assert!(cli_stderr.contains("TARGET_READ_ERROR"));
     assert!(!cli_stderr.contains("failed file groups:"));
     assert_eq!(
         cli_stderr
@@ -1812,7 +1829,7 @@ fn cli_failed_patch_artifact_recovers_workspace_anchor_outside_invocation_cwd() 
     assert!(!cli_output.status.success());
     let cli_stderr = utf8(&cli_output.stderr);
     assert!(utf8(&cli_output.stdout).is_empty());
-    assert!(cli_stderr.contains("TARGET_WRITE_ERROR"), "{cli_stderr}");
+    assert!(cli_stderr.contains("TARGET_READ_ERROR"), "{cli_stderr}");
     assert!(
         cli_stderr.contains(".docutouch/failed-patches/retry.patch"),
         "{cli_stderr}"

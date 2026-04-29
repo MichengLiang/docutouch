@@ -106,7 +106,11 @@ fn parse_rewrite_program_rejects_comment_only_selection_header_without_body() {
 
     assert_eq!(error.code(), "REWRITE_SELECTION_INVALID");
     assert_eq!(error.source_line(), Some(3));
-    assert!(error.message().contains("selection body must contain at least one numbered line"));
+    assert!(
+        error
+            .message()
+            .contains("selection body must contain at least one numbered line")
+    );
 }
 
 #[test]

@@ -10,12 +10,16 @@ use docutouch_core::{
     DirectoryListOptions, PatchWorkspaceRequirement, ReadFileLineRange, ReadFileOptions,
     ReadFileSampledViewOptions, RewriteWorkspaceRequirement, SearchTextOutputMode,
     SearchTextQueryMode, SearchTextResult, SearchTextSurfaceKind, SearchTextView,
-    SpliceWorkspaceRequirement, TimestampField, list_directory, normalize_sampled_view_options,
-    parse_read_file_line_range_text, patch_workspace_requirement, read_file_with_sampled_view,
-    rewrite_workspace_requirement, search_text, splice_workspace_requirement,
+    SpliceWorkspaceRequirement, StructuralSearchMode, StructuralSearchOptions,
+    StructuralSearchSession, StructuralSearchView, TimestampField, list_directory,
+    normalize_sampled_view_options, parse_read_file_line_range_text, patch_workspace_requirement,
+    read_file_with_sampled_view, rewrite_workspace_requirement, search_text,
+    splice_workspace_requirement,
 };
 use rmcp::model::{JsonObject, Tool};
 use schemars::JsonSchema;
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{InstanceType, Metadata, Schema, SchemaObject, SingleOrVec};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -29,6 +33,7 @@ use tokio::sync::RwLock;
 const APPLY_PATCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_patch.md");
 const APPLY_REWRITE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_rewrite.md");
 const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_splice.md");
+const STRUCTURAL_SEARCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/structural_search.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
 const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
 const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 接受任意 ripgrep 参数；工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。";
@@ -38,6 +43,7 @@ const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 ta
 pub struct ToolService {
     workspace: Arc<RwLock<Option<PathBuf>>>,
     execution_lock: Arc<RwLock<()>>,
+    structural_search_session: Arc<RwLock<StructuralSearchSession>>,
     mcp_tools: Arc<Vec<Tool>>,
 }
 
@@ -143,7 +149,9 @@ pub struct ApplyRewriteArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SearchTextArgs {
-    #[schemars(description = "要搜索的文本或模式。默认会先按 regex 解释；若 `query_mode` 为 `auto` 且 regex 解析失败，会自动回退为 literal 搜索。对 `--files`、`--type-list` 这类 queryless raw rg 模式，可传空字符串。")]
+    #[schemars(
+        description = "要搜索的文本或模式。默认会先按 regex 解释；若 `query_mode` 为 `auto` 且 regex 解析失败，会自动回退为 literal 搜索。对 `--files`、`--type-list` 这类 queryless raw rg 模式，可传空字符串。"
+    )]
     pub query: String,
     #[schemars(
         description = "必填搜索范围。可传单个 relative/absolute path，也可传形如 `pueue-log:<id>` 的 task-log handle；还可传由文件、目录或 `pueue-log:<id>` 组成的 path 数组，数组中的范围会合并为同一次搜索。"
@@ -169,6 +177,49 @@ pub struct SearchTextArgs {
     )]
     #[serde(default)]
     pub view: SearchTextViewInput,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StructuralSearchArgs {
+    #[schemars(description = "查询类型。合法值为 find、expand、around、explain_ast、rule_test。")]
+    pub mode: StructuralSearchModeInput,
+    #[schemars(
+        description = "可选 ast-grep pattern。find 和 rule_test 在未提供 rule 时使用该字段。"
+    )]
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[schemars(
+        schema_with = "structural_search_rule_schema",
+        description = "可选 ast-grep rule object。直接传 JSON object，不要传 JSON/YAML 字符串。工具只接受查询字段；包含 fix/rewrite/autofix/apply 等编辑字段时返回 unsupported-rule-field。"
+    )]
+    #[serde(default)]
+    pub rule: Option<Value>,
+    #[schemars(description = "可选查询说明；around/explain_ast 可用 path:line 作为局部结构目标。")]
+    #[serde(default)]
+    pub query: Option<String>,
+    #[schemars(description = "可选渐进披露引用。格式为 N 或 qN.N。")]
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    #[schemars(
+        description = "可选查询范围。可传单个 relative/absolute path 或 path 数组；缺省时使用当前 DocuTouch workspace。"
+    )]
+    #[serde(default)]
+    pub path: Option<SearchTextPathInput>,
+    #[schemars(description = "可选 ast-grep 语言，例如 rust、typescript、javascript、python。")]
+    #[serde(default)]
+    pub language: Option<String>,
+    #[schemars(description = "是否包含测试文件。默认 false。")]
+    #[serde(default)]
+    pub include_tests: bool,
+    #[schemars(description = "可选上下文请求，例如 captures、enclosing、siblings、node_tree。")]
+    #[serde(default)]
+    pub context: Vec<String>,
+    #[schemars(description = "可选结果组显示上限。必须大于 0。")]
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[schemars(description = "结果视图。preview 返回受限概览；full 返回更多匹配。默认 preview。")]
+    #[serde(default)]
+    pub view: StructuralSearchViewInput,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -223,6 +274,25 @@ pub enum SearchTextOutputModeInput {
     RawJson,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralSearchModeInput {
+    #[default]
+    Find,
+    Expand,
+    Around,
+    ExplainAst,
+    RuleTest,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StructuralSearchViewInput {
+    #[default]
+    Preview,
+    Full,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitModeInput {
@@ -235,6 +305,18 @@ pub enum WaitModeInput {
 pub enum TimestampFieldInput {
     Created,
     Modified,
+}
+
+fn structural_search_rule_schema(_generator: &mut SchemaGenerator) -> Schema {
+    SchemaObject {
+        metadata: Some(Box::new(Metadata {
+            description: Some("可选 ast-grep rule object。直接传 JSON object，不要传 JSON/YAML 字符串。工具只接受查询字段；包含 fix/rewrite/autofix/apply 等编辑字段时返回 unsupported-rule-field。".to_string()),
+            ..Default::default()
+        })),
+        instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+        ..Default::default()
+    }
+    .into()
 }
 
 #[derive(Debug)]
@@ -280,6 +362,7 @@ impl ToolService {
         Ok(Self {
             workspace: Arc::new(RwLock::new(default_workspace_from_env())),
             execution_lock: Arc::new(RwLock::new(())),
+            structural_search_session: Arc::new(RwLock::new(StructuralSearchSession::default())),
             mcp_tools: Arc::new(build_mcp_tools(true)?),
         })
     }
@@ -309,6 +392,10 @@ impl ToolService {
             "search_text" => {
                 let args = parse_json_args::<SearchTextArgs>(arguments)?;
                 self.search_text_impl(args).await
+            }
+            "structural_search" => {
+                let args = parse_json_args::<StructuralSearchArgs>(arguments)?;
+                self.structural_search_impl(args).await
             }
             "wait_pueue" => {
                 let args = parse_json_args::<WaitPueueArgs>(arguments)?;
@@ -415,6 +502,52 @@ impl ToolService {
             display_base_dir.as_deref(),
         )
         .await
+    }
+
+    async fn structural_search_impl(
+        &self,
+        args: StructuralSearchArgs,
+    ) -> Result<String, ServiceError> {
+        let _guard = self.execution_lock.read().await;
+        let display_base_dir = self.workspace.read().await.clone();
+        let search_paths = match &args.path {
+            Some(path_input) => {
+                if path_input.is_empty() {
+                    return Err(ServiceError::invalid_argument("path cannot be empty"));
+                }
+                resolve_structural_search_paths(
+                    &path_input
+                        .paths()
+                        .into_iter()
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>(),
+                    display_base_dir.as_deref(),
+                )?
+            }
+            None => display_base_dir.clone().into_iter().collect(),
+        };
+
+        let options = StructuralSearchOptions {
+            mode: args.mode.into(),
+            pattern: args.pattern,
+            rule: args.rule,
+            query: args.query,
+            reference: args.reference,
+            search_paths,
+            display_base_dir,
+            language: args.language,
+            include_tests: args.include_tests,
+            context: args.context,
+            limit: args.limit,
+            view: args.view.into(),
+        };
+
+        self.structural_search_session
+            .write()
+            .await
+            .search(options)
+            .await
+            .map_err(ServiceError::invalid_argument)
     }
 
     async fn wait_pueue_impl(&self, args: WaitPueueArgs) -> Result<String, ServiceError> {
@@ -587,6 +720,27 @@ impl From<SearchTextOutputModeInput> for SearchTextOutputMode {
     }
 }
 
+impl From<StructuralSearchModeInput> for StructuralSearchMode {
+    fn from(value: StructuralSearchModeInput) -> Self {
+        match value {
+            StructuralSearchModeInput::Find => StructuralSearchMode::Find,
+            StructuralSearchModeInput::Expand => StructuralSearchMode::Expand,
+            StructuralSearchModeInput::Around => StructuralSearchMode::Around,
+            StructuralSearchModeInput::ExplainAst => StructuralSearchMode::ExplainAst,
+            StructuralSearchModeInput::RuleTest => StructuralSearchMode::RuleTest,
+        }
+    }
+}
+
+impl From<StructuralSearchViewInput> for StructuralSearchView {
+    fn from(value: StructuralSearchViewInput) -> Self {
+        match value {
+            StructuralSearchViewInput::Preview => StructuralSearchView::Preview,
+            StructuralSearchViewInput::Full => StructuralSearchView::Full,
+        }
+    }
+}
+
 impl From<WaitModeInput> for WaitMode {
     fn from(value: WaitModeInput) -> Self {
         match value {
@@ -678,6 +832,10 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     tools.push(build_mcp_tool::<SearchTextArgs>(
         "search_text",
         SEARCH_TEXT_TOOL_DESCRIPTION,
+    )?);
+    tools.push(build_mcp_tool::<StructuralSearchArgs>(
+        "structural_search",
+        STRUCTURAL_SEARCH_TOOL_DESCRIPTION,
     )?);
     tools.push(build_mcp_tool::<WaitPueueArgs>(
         "wait_pueue",
@@ -1077,6 +1235,7 @@ pub(crate) async fn render_read_surface_content(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn render_search_surface(
     query: &str,
     raw_paths: &[String],
@@ -1159,7 +1318,9 @@ pub(crate) async fn resolve_search_surface_paths(
                     display_path.clone()
                 }
             };
-            let raw_path = normalize_display_text(&normalize_display_path(&resolved_path).display().to_string());
+            let raw_path = normalize_display_text(
+                &normalize_display_path(&resolved_path).display().to_string(),
+            );
             if raw_path != display_label {
                 raw_path_overrides.push((raw_path, display_label.clone()));
             }
@@ -1196,8 +1357,10 @@ pub(crate) fn rewrite_search_surface_result(
             rendered.content,
             raw_path_overrides,
         )),
-        SearchTextSurfaceKind::RawJson => rewrite_raw_json_search_surface(rendered.content, raw_path_overrides)
-            .map_err(ServiceError::invalid_argument),
+        SearchTextSurfaceKind::RawJson => {
+            rewrite_raw_json_search_surface(rendered.content, raw_path_overrides)
+                .map_err(ServiceError::invalid_argument)
+        }
     }
 }
 
@@ -1235,7 +1398,10 @@ pub(crate) fn rewrite_search_text_surface(
         .join("\n")
 }
 
-fn rewrite_raw_text_search_surface(rendered: String, path_overrides: &[(String, String)]) -> String {
+fn rewrite_raw_text_search_surface(
+    rendered: String,
+    path_overrides: &[(String, String)],
+) -> String {
     rendered
         .lines()
         .map(|line| {
@@ -1246,16 +1412,15 @@ fn rewrite_raw_text_search_surface(rendered: String, path_overrides: &[(String, 
                     updated = display_path.clone();
                     break;
                 }
-                if let Some(rest) = normalized.strip_prefix(resolved_path) {
-                    if rest.is_empty()
+                if let Some(rest) = normalized.strip_prefix(resolved_path)
+                    && (rest.is_empty()
                         || rest.starts_with('/')
                         || rest.starts_with(':')
                         || rest.starts_with('-')
-                        || rest.starts_with(' ')
-                    {
-                        updated = format!("{display_path}{rest}");
-                        break;
-                    }
+                        || rest.starts_with(' '))
+                {
+                    updated = format!("{display_path}{rest}");
+                    break;
                 }
             }
             updated
@@ -1277,23 +1442,25 @@ fn rewrite_raw_json_search_surface(
         let mut value: Value = serde_json::from_str(raw_line)
             .map_err(|error| format!("Failed to rewrite raw JSON search surface: {error}"))?;
         if let Some(path_ref) = value.pointer("/data/path/text").and_then(Value::as_str)
-            && let Some(rewritten_path) = path_overrides.iter().find_map(|(resolved_path, display_path)| {
-                let normalized = normalize_display_text(path_ref);
-                if normalized == *resolved_path {
-                    return Some(display_path.clone());
-                }
-                normalized.strip_prefix(resolved_path).and_then(|rest| {
-                    if rest.starts_with('/') {
-                        Some(format!("{display_path}{rest}"))
-                    } else {
-                        None
-                    }
-                })
-            })
+            && let Some(rewritten_path) =
+                path_overrides
+                    .iter()
+                    .find_map(|(resolved_path, display_path)| {
+                        let normalized = normalize_display_text(path_ref);
+                        if normalized == *resolved_path {
+                            return Some(display_path.clone());
+                        }
+                        normalized.strip_prefix(resolved_path).and_then(|rest| {
+                            if rest.starts_with('/') {
+                                Some(format!("{display_path}{rest}"))
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            && let Some(path_mut) = value.pointer_mut("/data/path/text")
         {
-            if let Some(path_mut) = value.pointer_mut("/data/path/text") {
-                *path_mut = Value::String(rewritten_path);
-            }
+            *path_mut = Value::String(rewritten_path);
         }
         lines.push(
             serde_json::to_string(&value)
@@ -1331,9 +1498,32 @@ fn strip_windows_verbatim_prefix(raw: &str) -> String {
     raw.strip_prefix(r"\\?\").unwrap_or(raw).to_string()
 }
 
+fn resolve_structural_search_paths(
+    raw_paths: &[String],
+    workspace: Option<&Path>,
+) -> Result<Vec<PathBuf>, ServiceError> {
+    let mut search_paths = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_path in raw_paths {
+        if raw_path.trim().is_empty() {
+            return Err(ServiceError::invalid_argument(
+                "path cannot contain an empty entry",
+            ));
+        }
+        let path = resolve_user_path(raw_path, workspace)?;
+        if seen.insert(path.clone()) {
+            search_paths.push(path);
+        }
+    }
+    Ok(search_paths)
+}
+
 fn normalize_display_text(raw: &str) -> String {
     let mut normalized = raw.replace('\\', "/");
-    normalized = normalized.strip_prefix("//?/").unwrap_or(&normalized).to_string();
+    normalized = normalized
+        .strip_prefix("//?/")
+        .unwrap_or(&normalized)
+        .to_string();
     while normalized.contains("/./") {
         normalized = normalized.replace("/./", "/");
     }
@@ -1516,8 +1706,7 @@ mod tests {
 
     #[test]
     fn windows_hint_ignores_windows_style_workspace_paths() {
-        let hint =
-            workspace_path_style_hint_for_platform(r"C:\Users\t103o\workbench", true);
+        let hint = workspace_path_style_hint_for_platform(r"C:\Users\t103o\workbench", true);
         assert!(hint.is_none());
     }
 

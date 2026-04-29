@@ -216,7 +216,7 @@ mod tests {
             error.contains("= patch: .docutouch/failed-patches/retry.patch"),
             "{error}"
         );
-        assert!(error.contains("TARGET_WRITE_ERROR"), "{error}");
+        assert!(error.contains("TARGET_READ_ERROR"), "{error}");
     }
 
     #[test]

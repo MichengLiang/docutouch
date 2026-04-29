@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use crate::line_boundary::normalize_replacement_payload_for_result_suffix;
 use crate::rewrite_program::{
     AddFileOperation, DeleteFileOperation, RewriteAction, RewriteFileOperation, RewriteProgram,

@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "docutouch-server"
-version = "0.1.3"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "docutouch-core",

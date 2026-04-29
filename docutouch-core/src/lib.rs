@@ -12,6 +12,7 @@ pub mod splice_presentation;
 pub mod splice_program;
 pub mod splice_runtime;
 pub mod splice_selection;
+pub mod structural_search;
 
 pub use codex_apply_patch::AffectedPaths;
 pub use fs_tools::{
@@ -54,4 +55,7 @@ pub use splice_selection::{
     ResolvedSelection, ResolvedSelectionOffsets, SelectionBlock, SelectionDiagnosticCode,
     SelectionItem, SelectionLine, SelectionParseError, SelectionResolveError, SelectionSide,
     parse_selection_block, resolve_selection_block, resolve_selection_offsets,
+};
+pub use structural_search::{
+    StructuralSearchMode, StructuralSearchOptions, StructuralSearchSession, StructuralSearchView,
 };

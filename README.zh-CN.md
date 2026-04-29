@@ -425,9 +425,9 @@ Release workflow 在匹配 `v*` 的 tag 上运行：
 6. 生成 `SHA256SUMS.txt`。
 7. 发布 GitHub Release，并使用 generated release notes。
 
-npm workflow 在 GitHub Release published 之后运行，也可以手动 dispatch：
+npm workflow 在 `release` workflow 于 `v*` tag 上成功完成后运行，也可以通过显式 tag 手动 dispatch：
 
-1. release event 触发时 checkout 对应 release tag。
+1. 从 `workflow_run.head_branch` 或手动传入的 tag checkout release tag。
 2. 安装 Node 24。
 3. 校验 `v${npm/package.json.version}` 与 release tag 一致。
 4. 在 `npm/` 下运行 `npm publish --provenance --access public`。

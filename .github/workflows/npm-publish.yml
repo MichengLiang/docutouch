@@ -1,10 +1,17 @@
 name: npm-publish
 
 on:
-  release:
+  workflow_run:
+    workflows:
+      - release
     types:
-      - published
+      - completed
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish from, for example v0.1.5.
+        required: true
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -12,17 +19,24 @@ env:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name != 'release'
+        if: github.event_name == 'workflow_run'
+        with:
+          ref: ${{ github.event.workflow_run.head_branch }}
 
       - uses: actions/checkout@v4
-        if: github.event_name == 'release'
+        if: github.event_name == 'workflow_dispatch'
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -30,11 +44,21 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Verify release tag matches npm package version
-        if: github.event_name == 'release'
         shell: bash
         run: |
           PKG_VERSION=$(node -p "require('./npm/package.json').version")
-          TAG_NAME="${{ github.event.release.tag_name }}"
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            TAG_NAME="${{ github.event.workflow_run.head_branch }}"
+          else
+            TAG_NAME="${{ inputs.tag }}"
+          fi
+          case "$TAG_NAME" in
+            v*) ;;
+            *)
+              echo "::error::npm publish requires a v* release tag, got '$TAG_NAME'"
+              exit 1
+              ;;
+          esac
           test "v${PKG_VERSION}" = "${TAG_NAME}"
 
       - name: Publish npm package with provenance

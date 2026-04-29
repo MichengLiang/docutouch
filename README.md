@@ -425,9 +425,9 @@ The release workflow runs on tags matching `v*`:
 6. Generate `SHA256SUMS.txt`.
 7. Publish a GitHub Release with generated release notes.
 
-The npm workflow runs after a GitHub Release is published or by manual dispatch:
+The npm workflow runs after the `release` workflow completes successfully on a `v*` tag, or by manual dispatch with an explicit tag:
 
-1. Check out the release tag when triggered by a release event.
+1. Check out the release tag from `workflow_run.head_branch`, or the manually supplied tag.
 2. Install Node 24.
 3. Verify `v${npm/package.json.version}` matches the release tag.
 4. Run `npm publish --provenance --access public` from `npm/`.

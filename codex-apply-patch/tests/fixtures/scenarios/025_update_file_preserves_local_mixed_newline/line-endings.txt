@@ -1,0 +1,2 @@
+input/mixed.txt mixed-leading-crlf
+expected/mixed.txt mixed-leading-crlf

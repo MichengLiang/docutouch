@@ -1,0 +1,2 @@
+input/crlf.txt crlf
+expected/crlf.txt crlf

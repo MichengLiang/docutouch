@@ -70,12 +70,12 @@ pub struct ListDirectoryArgs {
     #[serde(default)]
     pub include_gitignored: bool,
     #[schemars(
-        description = "按内置 ripgrep/ignore 默认文件类型别名只显示匹配的文件；例如 rust、cpp、ts、python。可传多个，目录作为匹配文件路径上下文显示，max_depth 边界目录会作为未展开的继续探索上下文保留。默认不过滤。"
+        description = "按内置 ripgrep/ignore 默认文件类型别名只显示匹配的文件；例如 rust、cpp、ts、python。未知类型会在结果中警告并被忽略；若没有任何有效类型，工具回退为普通目录树。默认不过滤。"
     )]
     #[serde(default)]
     pub file_types: Vec<String>,
     #[schemars(
-        description = "按内置 ripgrep/ignore 默认文件类型别名排除匹配的文件；例如 markdown、json、minified。与 file_types 同时使用时，排除规则优先；暂不支持自定义 type-add 定义。默认不排除。"
+        description = "按内置 ripgrep/ignore 默认文件类型别名排除匹配的文件；例如 markdown、json、minified。未知类型会在结果中警告并被忽略；与 file_types 同时使用时，排除规则优先。默认不排除。"
     )]
     #[serde(default)]
     pub file_types_not: Vec<String>,
@@ -823,7 +823,7 @@ fn build_mcp_tools(include_set_workspace: bool) -> Result<Vec<Tool>, serde_json:
     }
     tools.push(build_mcp_tool::<ListDirectoryArgs>(
         "list_directory",
-        "以 ASCII 树列出目录内容。默认显示文件大小与总行数；适合获取文件清单、判断阅读优先级和选择下一步要读的文件。可选显示隐藏项、Git ignore 项、时间戳字段，并可用 `file_types` / `file_types_not` 按内置 ripgrep/ignore 默认文件类型别名过滤文件，例如 rust、cpp、ts、python；暂不支持自定义 type-add 定义，先用 `search_text` 的 `rg_args=\"--type-list\"` 查看常见内置类型。",
+        "以 ASCII 树列出目录内容。默认显示文件大小与总行数；适合获取文件清单、判断阅读优先级和选择下一步要读的文件。可选显示隐藏项、Git ignore 项、时间戳字段，并可用 `file_types` / `file_types_not` 按内置 ripgrep/ignore 默认文件类型别名过滤文件，例如 rust、cpp、ts、python。未知类型不会使目录读取失败，会在结果中警告并被忽略；若没有任何有效类型，工具回退为普通目录树。",
     )?);
     tools.push(build_mcp_tool::<ReadFileArgs>(
         "read_file",

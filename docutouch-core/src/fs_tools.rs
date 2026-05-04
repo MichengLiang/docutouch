@@ -33,6 +33,7 @@ pub struct DirectoryListResult {
     pub filtered_gitignored_count: usize,
     pub filtered_both_count: usize,
     pub filtered_type_count: usize,
+    pub warnings: Vec<String>,
 }
 
 impl DirectoryListResult {
@@ -56,7 +57,9 @@ impl DirectoryListResult {
             + self.filtered_both_count
             + self.filtered_type_count;
         if filtered_total == 0 {
-            return format!("{}\n{}", self.tree, stats);
+            let mut display = format!("{}\n{}", self.tree, stats);
+            append_warnings(&mut display, &self.warnings);
+            return display;
         }
 
         let mut filtered_parts = vec![
@@ -68,13 +71,27 @@ impl DirectoryListResult {
             filtered_parts.push(format!("{} type", self.filtered_type_count));
         }
 
-        format!(
+        let mut display = format!(
             "{}\n{}\nfiltered: {} entries ({})",
             self.tree,
             stats,
             filtered_total,
             filtered_parts.join(", "),
-        )
+        );
+        append_warnings(&mut display, &self.warnings);
+        display
+    }
+}
+
+fn append_warnings(display: &mut String, warnings: &[String]) {
+    if warnings.is_empty() {
+        return;
+    }
+
+    display.push_str("\nwarnings:");
+    for warning in warnings {
+        display.push_str("\n- ");
+        display.push_str(warning);
     }
 }
 
@@ -192,7 +209,7 @@ pub fn list_directory(
     } else {
         options.max_depth
     };
-    let type_matcher = build_type_matcher(&options)?;
+    let type_filter = build_type_filter(&options)?;
     let repo_root = find_git_repo_root(dir_path);
     let mut matcher_cache: HashMap<PathBuf, Vec<GitIgnoreMatcher>> = HashMap::new();
     let mut lines = vec![format!("{}/", display_dir_name(dir_path))];
@@ -204,7 +221,7 @@ pub fn list_directory(
         1,
         max_depth,
         &options,
-        type_matcher.as_ref(),
+        type_filter.matcher.as_ref(),
         repo_root.as_deref(),
         &mut matcher_cache,
         &mut lines,
@@ -219,6 +236,7 @@ pub fn list_directory(
         filtered_gitignored_count: counts.filtered_gitignored_count,
         filtered_both_count: counts.filtered_both_count,
         filtered_type_count: counts.filtered_type_count,
+        warnings: type_filter.warnings,
     })
 }
 
@@ -438,25 +456,61 @@ struct RenderedChild {
     child_lines: Vec<String>,
 }
 
-fn build_type_matcher(options: &DirectoryListOptions) -> std::io::Result<Option<Types>> {
+struct TypeFilter {
+    matcher: Option<Types>,
+    warnings: Vec<String>,
+}
+
+fn build_type_filter(options: &DirectoryListOptions) -> std::io::Result<TypeFilter> {
     if options.file_types.is_empty() && options.file_types_not.is_empty() {
-        return Ok(None);
+        return Ok(TypeFilter {
+            matcher: None,
+            warnings: Vec::new(),
+        });
     }
 
     let mut builder = TypesBuilder::new();
     builder.add_defaults();
+    let mut selected_any = false;
+    let mut warnings = Vec::new();
     for file_type in &options.file_types {
         let name = parse_file_type_name("file_types", file_type)?;
-        builder.select(name);
+        if is_known_file_type(name, true) {
+            builder.select(name);
+            selected_any = true;
+        } else {
+            warnings.push(format!(
+                "file_types ignored unknown ripgrep/ignore file type '{name}'"
+            ));
+        }
     }
     for file_type in &options.file_types_not {
         let name = parse_file_type_name("file_types_not", file_type)?;
-        builder.negate(name);
+        if is_known_file_type(name, false) {
+            builder.negate(name);
+            selected_any = true;
+        } else {
+            warnings.push(format!(
+                "file_types_not ignored unknown ripgrep/ignore file type '{name}'"
+            ));
+        }
     }
-    builder
+    if !selected_any {
+        warnings.push(
+            "no valid file type filters remained; type filtering was disabled for this call"
+                .to_string(),
+        );
+        return Ok(TypeFilter {
+            matcher: None,
+            warnings,
+        });
+    }
+
+    let matcher = builder
         .build()
         .map(Some)
-        .map_err(|err| std::io::Error::other(format!("invalid file type filter: {err}")))
+        .map_err(|err| std::io::Error::other(format!("invalid file type filter: {err}")))?;
+    Ok(TypeFilter { matcher, warnings })
 }
 
 fn parse_file_type_name<'a>(field_name: &str, value: &'a str) -> std::io::Result<&'a str> {
@@ -467,6 +521,17 @@ fn parse_file_type_name<'a>(field_name: &str, value: &'a str) -> std::io::Result
         )));
     }
     Ok(trimmed)
+}
+
+fn is_known_file_type(name: &str, include: bool) -> bool {
+    let mut builder = TypesBuilder::new();
+    builder.add_defaults();
+    if include {
+        builder.select(name);
+    } else {
+        builder.negate(name);
+    }
+    builder.build().is_ok()
 }
 
 fn is_type_filtered(path: &Path, type_matcher: Option<&Types>) -> bool {

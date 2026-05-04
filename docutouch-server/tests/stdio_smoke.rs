@@ -2525,6 +2525,41 @@ async fn server_list_directory_can_exclude_ripgrep_file_type() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn server_list_directory_warns_and_ignores_unknown_ripgrep_file_type() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    std::fs::write(temp.path().join("README.md"), "# notes\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({
+                    "relative_path": ".",
+                    "file_types": ["notatype"]
+                }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.contains("README.md"));
+        assert!(text.contains("warnings:"));
+        assert!(text.contains("notatype"));
+        assert!(text.contains("type filtering was disabled"));
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_reports_outer_format_failure() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     with_server_client!(temp.path(), client, {

@@ -142,9 +142,11 @@ fn list_directory_keeps_max_depth_boundary_dirs_under_type_filter() {
 }
 
 #[test]
-fn list_directory_reports_unknown_ripgrep_file_type() {
+fn list_directory_warns_and_ignores_unknown_ripgrep_file_type() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let err = list_directory(
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
         temp.path(),
         DirectoryListOptions {
             max_depth: 2,
@@ -155,9 +157,36 @@ fn list_directory_reports_unknown_ripgrep_file_type() {
             timestamp_fields: Vec::new(),
         },
     )
-    .expect_err("unknown type should fail");
+    .expect("unknown type should warn and fall back");
 
-    assert!(err.to_string().contains("notatype"));
+    assert!(result.tree.contains("README.md"));
+    assert!(result.display().contains("warnings:"));
+    assert!(result.display().contains("notatype"));
+    assert!(result.display().contains("type filtering was disabled"));
+}
+
+#[test]
+fn list_directory_uses_known_ripgrep_file_types_when_some_requested_types_are_unknown() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(temp.path().join("main.rs"), "fn main() {}\n").expect("write rust");
+    std::fs::write(temp.path().join("README.md"), "# notes\n").expect("write markdown");
+
+    let result = list_directory(
+        temp.path(),
+        DirectoryListOptions {
+            max_depth: 2,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: vec!["rust".to_string(), "notatype".to_string()],
+            file_types_not: Vec::new(),
+            timestamp_fields: Vec::new(),
+        },
+    )
+    .expect("known type should remain active");
+
+    assert!(result.tree.contains("main.rs"));
+    assert!(!result.tree.contains("README.md"));
+    assert!(result.display().contains("notatype"));
 }
 
 #[test]

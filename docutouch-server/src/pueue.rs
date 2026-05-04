@@ -215,6 +215,7 @@ impl PueueRuntime {
     async fn run_command<const N: usize>(&self, args: [&str; N]) -> Result<String, PueueError> {
         let output = Command::new(&self.executable)
             .args(args)
+            .env("XDG_RUNTIME_DIR", &self.paths.runtime_dir)
             .output()
             .await
             .map_err(|err| {
@@ -326,7 +327,7 @@ fn resolve_pueue_paths() -> Result<PueuePaths, PueueError> {
     };
     let runtime_dir = match config.runtime_dir {
         Some(path) => path,
-        None => state_dir.clone(),
+        None => default_runtime_dir(&state_dir)?,
     };
 
     Ok(PueuePaths {
@@ -396,6 +397,42 @@ fn default_state_dir() -> Result<PathBuf, PueueError> {
         .join(".local")
         .join("share")
         .join("pueue"))
+}
+
+fn default_runtime_dir(state_dir: &Path) -> Result<PathBuf, PueueError> {
+    if cfg!(windows) {
+        return Ok(state_dir.to_path_buf());
+    }
+
+    if let Some(path) = env_path("XDG_RUNTIME_DIR")? {
+        return Ok(path);
+    }
+
+    if let Some(path) = runtime_dir_from_home_owner()? {
+        return Ok(path);
+    }
+
+    Ok(state_dir.to_path_buf())
+}
+
+#[cfg(unix)]
+fn runtime_dir_from_home_owner() -> Result<Option<PathBuf>, PueueError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let home = env_required_path("HOME")?;
+    let uid = std::fs::metadata(&home).map_err(|err| {
+        PueueError::RuntimeResolution(format!(
+            "unable to inspect HOME ownership at {}: {err}",
+            home.display()
+        ))
+    })?;
+    let runtime_dir = PathBuf::from("/run/user").join(uid.uid().to_string());
+    Ok(runtime_dir.is_dir().then_some(runtime_dir))
+}
+
+#[cfg(not(unix))]
+fn runtime_dir_from_home_owner() -> Result<Option<PathBuf>, PueueError> {
+    Ok(None)
 }
 
 fn env_required_path(name: &str) -> Result<PathBuf, PueueError> {

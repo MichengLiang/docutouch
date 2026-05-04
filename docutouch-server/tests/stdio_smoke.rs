@@ -136,6 +136,15 @@ def main() -> int:
         print(f"unsupported pueue stub args: {sys.argv[1:]}", file=sys.stderr)
         return 1
 
+    required_runtime_dir = os.environ.get("DOCUTOUCH_TEST_REQUIRE_XDG_RUNTIME_DIR")
+    if required_runtime_dir and os.environ.get("XDG_RUNTIME_DIR") != required_runtime_dir:
+        print(
+            "XDG_RUNTIME_DIR mismatch: "
+            f"expected {required_runtime_dir!r}, got {os.environ.get('XDG_RUNTIME_DIR')!r}",
+            file=sys.stderr,
+        )
+        return 1
+
     plan_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_PLAN"])
     counter_path = pathlib.Path(os.environ["DOCUTOUCH_TEST_PUEUE_COUNTER"])
     snapshots = json.loads(plan_path.read_text(encoding="utf-8"))["snapshots"]
@@ -164,6 +173,12 @@ if __name__ == "__main__":
                 r#"$ErrorActionPreference = 'Stop'
 if ($args.Count -ne 2 -or $args[0] -ne 'status' -or $args[1] -ne '--json') {
     [Console]::Error.WriteLine("unsupported pueue stub args: $args")
+    exit 1
+}
+
+$requiredRuntimeDir = $env:DOCUTOUCH_TEST_REQUIRE_XDG_RUNTIME_DIR
+if ($requiredRuntimeDir -and $env:XDG_RUNTIME_DIR -ne $requiredRuntimeDir) {
+    [Console]::Error.WriteLine("XDG_RUNTIME_DIR mismatch: expected '$requiredRuntimeDir', got '$env:XDG_RUNTIME_DIR'")
     exit 1
 }
 
@@ -701,6 +716,43 @@ async fn server_wait_pueue_invalid_timeout_is_reported_as_invalid_argument() -> 
 
         Ok(())
     })
+}
+
+#[tokio::test]
+async fn server_wait_pueue_passes_resolved_runtime_dir_to_pueue_process() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let fixture = PueueStubFixture::new(
+        temp.path(),
+        &[status_snapshot(vec![done_task(42, "Success", 0)])],
+        &[(42, "alpha\n")],
+    )?;
+    with_server_client!(
+        temp.path(),
+        |cmd| {
+            fixture.configure_command(cmd);
+            cmd.env(
+                "DOCUTOUCH_TEST_REQUIRE_XDG_RUNTIME_DIR",
+                &fixture.runtime_dir,
+            );
+        },
+        client,
+        {
+            let result = client
+                .call_tool(CallToolRequestParams {
+                    meta: None,
+                    name: "wait_pueue".into(),
+                    arguments: Some(json_object(json!({
+                        "task_ids": [42],
+                        "timeout_seconds": 1
+                    }))),
+                    task: None,
+                })
+                .await?;
+            let text = &result.content[0].as_text().unwrap().text;
+            assert!(text.contains("reason: task_finished"), "{text}");
+            Ok(())
+        }
+    )
 }
 
 #[tokio::test]

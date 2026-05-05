@@ -1,4 +1,4 @@
-`search_text` 是一个 ripgrep-compatible、LLM-friendly 的智能搜索工具。`query` 是要搜索的文本或模式；`path` 是搜索范围，可为单个 path、path 数组或 `pueue-log:<id>`。`rg_args` 接受任意 ripgrep 参数，工具会自动推断最合适的结果对象并尽量保持高信噪输出。
+`search_text` 是一个 ripgrep-compatible、LLM-friendly 的智能搜索工具。`query` 是要搜索的文本或模式；`path` 是搜索范围，可为单个 path、path 数组或 `pueue-log:<id>`。`rg_args` 只放 ripgrep flags/options；不要把搜索文本或路径放进 `rg_args`，例如只写 `--type py`，不要写 `--type py tests/tools`。工具会自动推断最合适的结果对象并尽量保持高信噪输出。
 
 默认情况下，`search_text` 优先返回 DocuTouch 风格的 grouped 结果，适合 discovery 和后续 `read_file` 阅读。当 `rg_args` 表达了更明确的输出意图时，工具会自动切换到更合适的模式，例如：
 

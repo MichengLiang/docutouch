@@ -626,6 +626,8 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
 
         assert!(tool_description(read_file).contains("pueue-log:<id>"));
         assert!(tool_description(search_text).contains("pueue-log:<id>"));
+        assert!(tool_description(search_text).contains("flags/options"));
+        assert!(tool_description(search_text).contains("不要把搜索文本或路径放进 `rg_args`"));
         assert!(tool_description(structural_search).contains("AST 结构查询工具"));
         assert!(tool_description(structural_search).contains("unsupported-rule-field"));
         assert!(tool_description(wait_pueue).contains("pueue-log:<id>"));
@@ -641,6 +643,10 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
         assert!(!read_line_range_description.contains("start,end"));
         assert!(!read_line_range_description.contains("step"));
         assert!(input_schema_property_description(search_text, "path").contains("pueue-log:<id>"));
+        let search_rg_args_description = input_schema_property_description(search_text, "rg_args");
+        assert!(search_rg_args_description.contains("flags/options"));
+        assert!(search_rg_args_description.contains("不要包含 pattern"));
+        assert!(search_rg_args_description.contains("不要包含 path"));
         assert!(input_schema_property_description(structural_search, "mode").contains("find"));
         assert!(input_schema_property_description(structural_search, "ref").contains("qN.N"));
         assert!(

@@ -36,7 +36,7 @@ const APPLY_SPLICE_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/apply_spl
 const STRUCTURAL_SEARCH_TOOL_DESCRIPTION: &str = include_str!("../tool_docs/structural_search.md");
 pub(crate) const DEFAULT_WORKSPACE_ENV: &str = "DOCUTOUCH_DEFAULT_WORKSPACE";
 const READ_FILE_TOOL_DESCRIPTION: &str = "默认返回全文；可选用 line_range 读取连续片段。`sample_step` 与 `sample_lines` 定义低成本局部检查视图；`max_chars` 定义当前读取结果中每一行的最大显示宽度。`relative_path` 除了 relative/absolute filesystem path 外，也接受形如 `pueue-log:<id>` 的 task-log handle literal，可直接读取 `wait_pueue` 返回的日志句柄。返回结果始终保持 content-first，不附加额外模式头；若发生纵向省略，使用单独一行 `...`，若发生横向裁切，使用 `...[N chars omitted]`。";
-const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 接受任意 ripgrep 参数；工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。";
+const SEARCH_TEXT_TOOL_DESCRIPTION: &str = "ripgrep-compatible、对大模型友好的智能搜索工具。`query` 是待搜索文本或模式，`path` / `path[]` 是搜索范围，也接受 `pueue-log:<id>` 句柄。`rg_args` 只放 ripgrep flags/options；不要把搜索文本或路径放进 `rg_args`，搜索文本必须放 `query`，搜索范围必须放 `path` 或 `path[]`。工具会自动推断更合适的结果对象并尽量保持高信噪输出：默认优先返回 grouped 结果，context flags 会转成 `grouped_context`，count flags 会转成 `counts`，file-list flags 会转成 `files`，`--json` 会直接返回原始 JSON，无法忠实包装的组合会退回 `raw_text`。`query_mode` 默认 `auto`，regex 解析失败时会自动回退为 literal 搜索；`output_mode` 默认 `auto`，也可显式指定 `grouped`、`grouped_context`、`counts`、`files`、`raw_text` 或 `raw_json`。";
 const WAIT_PUEUE_TOOL_DESCRIPTION: &str = "等待一个或多个 Pueue 后台 task 进入满足条件的终态，并返回稳定的 wait summary surface。终态 task block 会附带形如 `pueue-log:<id>` 的 `log_handle`；该 handle 可直接交给 `read_file.relative_path` 或 `search_text.path` / `search_text.path[]` 继续检查日志。缺省时对调用开始瞬间的未完成 task 快照进行等待。";
 
 #[derive(Clone)]
@@ -158,7 +158,7 @@ pub struct SearchTextArgs {
     )]
     pub path: SearchTextPathInput,
     #[schemars(
-        description = "可选的原始 ripgrep 参数字符串。接受任意 `rg` 参数；工具会根据这些参数自动推断更合适的输出模式，例如 grouped、grouped_context、counts、files、raw_text、raw_json。"
+        description = "可选的原始 ripgrep flags/options 字符串。不要包含 pattern；不要包含 path。搜索文本使用 `query`，搜索范围使用 `path` 或 `path[]`；例如只写 `--type py`，不要写 `--type py tests/tools`。工具会根据这些 flags/options 自动推断更合适的输出模式，例如 grouped、grouped_context、counts、files、raw_text、raw_json。"
     )]
     #[serde(default)]
     pub rg_args: String,

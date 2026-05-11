@@ -25,6 +25,7 @@ fn list_directory_hides_gitignored_entries_by_default() {
             file_types: Vec::new(),
             file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("list directory");
@@ -33,6 +34,31 @@ fn list_directory_hides_gitignored_entries_by_default() {
     assert!(!result.tree.contains("cache.txt"));
     assert!(result.tree.contains("visible.txt"));
     assert_eq!(result.filtered_gitignored_count, 2);
+}
+
+#[test]
+fn list_directory_can_render_explicit_root_display() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let target = temp.path().join("workspace").join("project");
+    std::fs::create_dir_all(&target).expect("target dir");
+    std::fs::write(target.join("notes.txt"), "notes\n").expect("write file");
+
+    let result = list_directory(
+        &target,
+        DirectoryListOptions {
+            max_depth: 2,
+            show_hidden: false,
+            include_gitignored: true,
+            file_types: Vec::new(),
+            file_types_not: Vec::new(),
+            timestamp_fields: Vec::new(),
+            root_display: Some(target.display().to_string()),
+        },
+    )
+    .expect("list directory");
+
+    assert!(result.tree.starts_with(&format!("{}/\n", target.display())));
+    assert!(result.tree.contains("notes.txt"));
 }
 
 #[test]
@@ -52,6 +78,7 @@ fn list_directory_can_include_ripgrep_file_types() {
             file_types: vec!["rust".to_string()],
             file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("list directory");
@@ -78,6 +105,7 @@ fn list_directory_can_exclude_ripgrep_file_types() {
             file_types: Vec::new(),
             file_types_not: vec!["markdown".to_string()],
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("list directory");
@@ -102,6 +130,7 @@ fn list_directory_type_exclusion_wins_over_inclusion() {
             file_types: vec!["rust".to_string(), "markdown".to_string()],
             file_types_not: vec!["rust".to_string()],
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("list directory");
@@ -131,6 +160,7 @@ fn list_directory_keeps_max_depth_boundary_dirs_under_type_filter() {
             file_types: vec!["rust".to_string()],
             file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("list directory");
@@ -155,6 +185,7 @@ fn list_directory_warns_and_ignores_unknown_ripgrep_file_type() {
             file_types: vec!["notatype".to_string()],
             file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("unknown type should warn and fall back");
@@ -180,6 +211,7 @@ fn list_directory_uses_known_ripgrep_file_types_when_some_requested_types_are_un
             file_types: vec!["rust".to_string(), "notatype".to_string()],
             file_types_not: Vec::new(),
             timestamp_fields: Vec::new(),
+            root_display: None,
         },
     )
     .expect("known type should remain active");
@@ -519,6 +551,7 @@ fn list_directory_can_show_requested_timestamps() {
             file_types: Vec::new(),
             file_types_not: Vec::new(),
             timestamp_fields: vec![TimestampField::Modified],
+            root_display: None,
         },
     )
     .expect("list directory");

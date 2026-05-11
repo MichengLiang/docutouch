@@ -22,6 +22,7 @@ pub struct DirectoryListOptions {
     pub file_types: Vec<String>,
     pub file_types_not: Vec<String>,
     pub timestamp_fields: Vec<TimestampField>,
+    pub root_display: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -211,7 +212,7 @@ pub fn list_directory(
     let type_filter = build_type_filter(&options)?;
     let repo_root = find_git_repo_root(dir_path);
     let mut matcher_cache: HashMap<PathBuf, Vec<GitIgnoreMatcher>> = HashMap::new();
-    let mut lines = vec![format!("{}/", display_dir_name(dir_path))];
+    let mut lines = vec![format!("{}/", display_root_dir_name(dir_path, &options))];
     let mut counts = Counts::default();
 
     walk_directory(
@@ -963,10 +964,25 @@ fn format_system_time(value: Option<std::time::SystemTime>) -> String {
         .unwrap_or_else(|_| "unavailable".to_string())
 }
 
+fn display_root_dir_name(dir_path: &Path, options: &DirectoryListOptions) -> String {
+    options
+        .root_display
+        .as_deref()
+        .map(trim_trailing_path_separators)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| display_dir_name(dir_path))
+}
+
 fn display_dir_name(dir_path: &Path) -> String {
     dir_path
         .file_name()
         .and_then(|name| name.to_str())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| dir_path.display().to_string())
+}
+
+fn trim_trailing_path_separators(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() { path } else { trimmed }
 }

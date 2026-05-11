@@ -2511,6 +2511,78 @@ async fn server_list_directory_can_show_requested_timestamps() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn server_list_directory_uses_short_root_for_workspace_relative_paths() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project)?;
+    std::fs::write(project.join("notes.md"), "alpha\n")?;
+    with_server_client!(temp.path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": temp.path() }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({ "relative_path": "project" }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(text.starts_with("project/\n"), "{text}");
+        assert!(
+            !text.starts_with(&temp.path().display().to_string()),
+            "{text}"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn server_list_directory_uses_absolute_root_for_absolute_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().join("workspace");
+    let external = temp.path().join("external");
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(&external)?;
+    std::fs::write(external.join("notes.md"), "alpha\n")?;
+    with_server_client!(workspace.as_path(), client, {
+        client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "set_workspace".into(),
+                arguments: Some(json_object(json!({ "path": workspace }))),
+                task: None,
+            })
+            .await?;
+
+        let result = client
+            .call_tool(CallToolRequestParams {
+                meta: None,
+                name: "list_directory".into(),
+                arguments: Some(json_object(json!({ "relative_path": external }))),
+                task: None,
+            })
+            .await?;
+        let text = &result.content[0].as_text().unwrap().text;
+        assert!(
+            text.starts_with(&format!("{}/\n", external.display())),
+            "{text}"
+        );
+
+        Ok(())
+    })
+}
+
+#[tokio::test]
 async fn server_list_directory_can_filter_by_ripgrep_file_type() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     std::fs::create_dir_all(temp.path().join("src"))?;

@@ -458,6 +458,7 @@ async fn run_command(command: Command) -> Result<i32> {
 
 async fn run_list(command: ListCommand) -> Result<i32> {
     let cwd = std::env::current_dir()?;
+    let root_display = absolute_root_display(&command.path, None);
     let path = resolve_cli_path(&cwd, &command.path);
     let result = list_directory(
         &path,
@@ -468,6 +469,7 @@ async fn run_list(command: ListCommand) -> Result<i32> {
             file_types: command.file_types,
             file_types_not: command.file_types_not,
             timestamp_fields: command.timestamp_fields,
+            root_display,
         },
     );
     emit_result(result.map(|value| value.display()))
@@ -667,6 +669,15 @@ fn resolve_cli_path(cwd: &Path, raw_path: &str) -> PathBuf {
     } else {
         cwd.join(path)
     }
+}
+
+fn absolute_root_display(raw_path: &str, resolved_path: Option<&Path>) -> Option<String> {
+    Path::new(raw_path).is_absolute().then(|| {
+        resolved_path
+            .unwrap_or_else(|| Path::new(raw_path))
+            .display()
+            .to_string()
+    })
 }
 
 fn parse_usize_flag(flag: &str, value: &str) -> Result<usize, String> {

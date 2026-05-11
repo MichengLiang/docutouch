@@ -668,6 +668,27 @@ async fn cli_list_can_filter_by_ripgrep_file_type() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn cli_list_uses_absolute_root_for_absolute_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let workspace = temp.path().join("workspace");
+    let external = temp.path().join("external");
+    std::fs::create_dir_all(&workspace)?;
+    std::fs::create_dir_all(&external)?;
+    std::fs::write(external.join("notes.md"), "alpha\n")?;
+
+    let output = run_cli(&workspace, &["list", external.to_str().unwrap()], None)?;
+    assert!(output.status.success());
+    let stdout = utf8(&output.stdout);
+    assert!(
+        stdout.starts_with(&format!("{}/\n", external.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("notes.md"));
+    assert!(utf8(&output.stderr).is_empty());
+    Ok(())
+}
+
 #[tokio::test]
 async fn cli_search_preview_matches_mcp_output() -> anyhow::Result<()> {
     let server_temp = tempfile::tempdir()?;

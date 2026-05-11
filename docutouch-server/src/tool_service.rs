@@ -435,6 +435,7 @@ impl ToolService {
     async fn list_directory_impl(&self, args: ListDirectoryArgs) -> Result<String, ServiceError> {
         let _guard = self.execution_lock.read().await;
         let dir_path = self.resolve_path(&args.relative_path).await?;
+        let root_display = absolute_root_display(&args.relative_path, Some(&dir_path));
         let result = list_directory(
             &dir_path,
             DirectoryListOptions {
@@ -448,6 +449,7 @@ impl ToolService {
                     .into_iter()
                     .map(map_timestamp_field)
                     .collect(),
+                root_display,
             },
         )
         .map_err(map_directory_error)?;
@@ -1640,6 +1642,15 @@ pub fn validate_workspace_path(path: &Path) -> Result<PathBuf, String> {
     }
     path.canonicalize()
         .map_err(|err| format!("Invalid path: {err}"))
+}
+
+fn absolute_root_display(raw_path: &str, resolved_path: Option<&Path>) -> Option<String> {
+    Path::new(raw_path).is_absolute().then(|| {
+        resolved_path
+            .unwrap_or_else(|| Path::new(raw_path))
+            .display()
+            .to_string()
+    })
 }
 
 fn default_workspace_from_env() -> Option<PathBuf> {

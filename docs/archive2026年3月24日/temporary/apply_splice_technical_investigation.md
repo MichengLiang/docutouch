@@ -217,16 +217,6 @@ Reason:
 
 - current product direction is to avoid tool-managed artifacts entirely; splice should not inherit patch-specific sidecar assumptions
 
-### 6.4 Sampled-read horizontal truncation semantics
-
-Do not reuse directly:
-
-- `max_chars` / `...[N chars omitted]` behavior from sampled `read_file`
-
-Reason:
-
-- `apply_splice` selections must forbid horizontal truncation
-
 ## 7. Main unresolved design questions
 
 The design is narrow enough to justify deeper investigation, but not yet narrow

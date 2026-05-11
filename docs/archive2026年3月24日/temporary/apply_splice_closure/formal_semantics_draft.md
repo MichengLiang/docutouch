@@ -109,7 +109,7 @@ Within a single source or target selection body:
 7. The syntax delimiter is exactly `digits + " | "`. The delimiter spaces are syntax, not content.
 8. Horizontal truncation markers such as `...[N chars omitted]` are forbidden.
 
-The last rule is mandatory because sampled `read_file` supports horizontal truncation only for inspection, not for denotation (`docutouch-core/src/fs_tools.rs:510-570`, `docs/apply_splice_spec.md:225-241`).
+The last rule is mandatory because splice selections must denote exact existing text, not a shortened display form.
 
 ### 3.3 Omission-token rules
 

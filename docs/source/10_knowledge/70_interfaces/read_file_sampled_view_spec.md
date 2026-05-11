@@ -38,8 +38,7 @@ read_file(
   line_range?: range,
   show_line_numbers?: bool,
   sample_step?: positive integer,
-  sample_lines?: positive integer,
-  max_chars?: positive integer
+  sample_lines?: positive integer
 )
 ```
 
@@ -59,12 +58,6 @@ parameter semantics:
 - `sample_lines`
   - 每个 sampled block 呈现的连续行数。
   - 缺省时，默认基线值为 `2`；若调用者显式给出较小的 `sample_step`，则会下调为满足校验约束的最接近默认值。
-- `max_chars`
-  - `read_file` 渲染时每行最多显示的字符数；
-  - 超出部分必须显式标记为 inline truncation。
-  - 仅在调用者显式提供时才启用 horizontal truncation；缺省时不做横向裁切。
-  - 当 sampled mode 未启用时，它作用于 exact contiguous read 的可见行。
-  - 当 sampled mode 启用时，它作用于 sampled lines。
 
 ## Activation And Defaulting Rule
 
@@ -74,7 +67,6 @@ parameter semantics:
 - 默认基线组合为：
   - `sample_step = 5`
   - `sample_lines = 2`
-  - `max_chars` 若显式提供，则同时作用于 sampled lines 的横向裁切
 - 为避免默认补值把请求补成无效形态，还需要遵守两条自适应规则：
   - 若调用者省略 `sample_step`、但给出了更大的 `sample_lines`，则 effective `sample_step` 至少提升到 `sample_lines + 1`；
   - 若调用者给出了较小的 `sample_step`、但省略 `sample_lines`，则 effective `sample_lines` 会收缩到严格小于 `sample_step` 的最近默认值。
@@ -99,7 +91,6 @@ sampled mode 不引入 out-of-band metadata header。
 - `range: ...`
 - `sample_step: ...`
 - `sample_lines: ...`
-- `max_chars: ...`
 
 ### Vertical Omission
 
@@ -110,18 +101,6 @@ vertical omission 使用单独一行：
 ```
 
 它表示显示窗口之间省略了整行内容。
-
-### Horizontal Omission
-
-horizontal truncation 必须保持 inline 且显式。
-
-Recommended shape:
-
-```text
-124 | const VERY_LONG = "abcdef..."...[37 chars omitted]
-```
-
-调用者不得把 horizontal truncation 与 vertical omission 混淆。
 
 ## Reading Model
 
@@ -146,32 +125,18 @@ Recommended set A: balanced local check
 
 - `sample_step = 4`
 - `sample_lines = 2`
-- `max_chars = 80`
 
 Recommended set B: cheaper local check
 
 - `sample_step = 5`
 - `sample_lines = 2`
-- `max_chars = 80`
 
-它是启用 horizontal truncation 时的稳定推荐组合；partial sampled call 的默认基线只定义 sampled cadence，行宽由调用者显式给定。
+它是 ordinary post-write confidence check 的稳定推荐组合；partial sampled call 的默认基线只定义 sampled cadence。
 
 Recommended set C: conservative local check
 
 - `sample_step = 3`
 - `sample_lines = 2`
-- `max_chars = 100`
-
-## Width Contract
-
-当前 contract 在需要宽度控制时选择 `max_chars`，而不是 percentage-based width 或 token-based width。
-
-原因在于 `max_chars`：
-
-- direct；
-- predictable；
-- model-agnostic；
-- 更容易在 prompt-facing guidance 中稳定教学。
 
 ## Prompt-Facing Guidance Boundary
 
@@ -181,7 +146,6 @@ Recommended set C: conservative local check
 - 对 exact contiguous read，优先使用 `line_range = start:stop` 这一路径；
 - 当不知道总行数、但需要看尾部时，直接使用 `-N:` 这类 tail-relative form；
 - `sample_lines = 2` 是稳定默认建议；
-- 只有在明确需要节省宽度时才使用 `max_chars` 控制行宽，同时保持 truncation 显式；
 - 需要精确位置时显式开启 line numbers。
 
 ## Acceptance Boundary

@@ -194,8 +194,7 @@ This is the phase that prevents two opposite failure modes:
    path identity, connected-unit grouping, staged commit/rollback,
    affected-path summarization, generic rendering helpers, numbered-excerpt codec.
 3. Freeze the explicit non-reuse set:
-   patch grammar, diff/hunk matching, patch-specific sidecar identity,
-   sampled-read horizontal truncation semantics.
+   patch grammar, diff/hunk matching, patch-specific sidecar identity.
 4. Decide whether numbered-excerpt parsing lives in a tiny shared codec module or
    a new low-level crate.
 5. Define the splice-owned module map:

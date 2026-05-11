@@ -45,7 +45,6 @@ struct ReadCommand {
     show_line_numbers: bool,
     sample_step: Option<usize>,
     sample_lines: Option<usize>,
-    max_chars: Option<usize>,
 }
 
 struct SearchCommand {
@@ -252,7 +251,6 @@ fn parse_read_command(args: &[String]) -> Result<ReadCommand, String> {
     let mut show_line_numbers = false;
     let mut sample_step = None;
     let mut sample_lines = None;
-    let mut max_chars = None;
     let mut index = 0usize;
     while index < args.len() {
         let arg = &args[index];
@@ -283,14 +281,6 @@ fn parse_read_command(args: &[String]) -> Result<ReadCommand, String> {
                 "--sample-lines",
                 value_at(args, index, "--sample-lines")?,
             )?);
-        } else if let Some(value) = arg.strip_prefix("--max-chars=") {
-            max_chars = Some(parse_usize_flag("--max-chars", value)?);
-        } else if arg == "--max-chars" {
-            index += 1;
-            max_chars = Some(parse_usize_flag(
-                "--max-chars",
-                value_at(args, index, "--max-chars")?,
-            )?);
         } else if arg.starts_with('-') {
             return Err(format!("unknown read flag: {arg}"));
         } else if path.is_none() {
@@ -307,7 +297,6 @@ fn parse_read_command(args: &[String]) -> Result<ReadCommand, String> {
         show_line_numbers,
         sample_step,
         sample_lines,
-        max_chars,
     })
 }
 
@@ -500,7 +489,6 @@ async fn run_read(command: ReadCommand) -> Result<i32> {
         ReadFileOptions {
             line_range: command.line_range,
             show_line_numbers: command.show_line_numbers,
-            max_chars: command.max_chars,
         },
         sampled_view,
     )
@@ -777,7 +765,7 @@ fn value_at<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str,
 
 fn usage(program: &str) -> String {
     format!(
-        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [-t|--type TYPE] [-T|--type-not TYPE] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N] [--max-chars N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--query-mode auto|literal|regex] [--output-mode auto|grouped|grouped_context|counts|files|raw_text|raw_json] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `list` supports built-in ripgrep/ignore file type aliases with `-t/--type` and `-T/--type-not`; custom type-add definitions are not supported.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `read` preserves full visible line width unless `--max-chars` is explicitly provided.\n  - `search` is the smart single-entry ripgrep surface: `query_mode auto` will fallback to literal on regex parse errors, and `output_mode auto` will infer grouped/counts/files/raw outputs from `rg_args`.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
+        "Usage:\n  {program}                Start the stdio MCP server\n  {program} mcp            Start the stdio MCP server\n  {program} serve          Start the stdio MCP server (alias)\n  {program} help           Show this help\n  {program} list [path] [--max-depth N] [--show-hidden] [--include-gitignored] [-t|--type TYPE] [-T|--type-not TYPE] [--timestamp-field created|modified]\n  {program} read <path> [--line-range START:END] [--show-line-numbers] [--sample-step N] [--sample-lines N]\n  {program} search <query> <path> [more_paths...] [--rg-args '...'] [--query-mode auto|literal|regex] [--output-mode auto|grouped|grouped_context|counts|files|raw_text|raw_json] [--view preview|full]\n  {program} wait-pueue [TASK_ID ...] [--mode any|all] [--timeout-seconds N]\n  {program} patch [patch-file] [--numbered-evidence-mode header_only|full]\n  {program} patch --patch-file <path> [--numbered-evidence-mode header_only|full]\n  {program} rewrite [rewrite-file]\n  {program} rewrite --rewrite-file <path>\n  {program} splice [splice-file]\n  {program} splice --splice-file <path>\n  {program} cli <subcommand> ...    Run the same CLI commands through an explicit group alias\n\nNotes:\n  - Running `{program}` with no subcommand starts the stdio MCP server.\n  - `mcp` is an explicit alias for the same stdio MCP server entrypoint.\n  - Top-level `list`, `read`, `search`, `wait-pueue`, `patch`, `rewrite`, and `splice` are the primary local CLI surface.\n  - `cli <subcommand>` remains available when you want an explicit grouping prefix.\n  - CLI relative paths resolve against the current working directory.\n  - `list` supports built-in ripgrep/ignore file type aliases with `-t/--type` and `-T/--type-not`; custom type-add definitions are not supported.\n  - `read` enters sampled local inspection mode when any sampled flag is present; omitted sampled flags are filled with stable defaults.\n  - `search` is the smart single-entry ripgrep surface: `query_mode auto` will fallback to literal on regex parse errors, and `output_mode auto` will infer grouped/counts/files/raw outputs from `rg_args`.\n  - `wait-pueue` preserves the MCP `wait_pueue` contract and returns the same wait summary surface.\n  - `patch` preserves MCP patch diagnostics and reads patch text from stdin when no file is provided.\n  - `patch` recovers the workspace anchor from `.docutouch/failed-patches/*.patch` when such a file is passed as a patch-file source.\n  - `patch` defaults to `header_only` numbered-evidence interpretation unless overridden by environment or `--numbered-evidence-mode`.\n  - `rewrite` reads rewrite text from stdin when no file is provided and applies the current rewrite runtime.\n  - `splice` reads splice text from stdin when no file is provided and applies the current splice runtime."
     )
 }
 

@@ -1949,8 +1949,7 @@ async fn cli_read_sampled_view_matches_mcp_output() -> anyhow::Result<()> {
             "relative_path": "notes.txt",
             "line_range": "1:7",
             "sample_step": 5,
-            "sample_lines": 2,
-            "max_chars": 80
+            "sample_lines": 2
         }),
     )
     .await?;
@@ -1966,8 +1965,6 @@ async fn cli_read_sampled_view_matches_mcp_output() -> anyhow::Result<()> {
             "5",
             "--sample-lines",
             "2",
-            "--max-chars",
-            "80",
         ],
         None,
     )?;

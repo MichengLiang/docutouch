@@ -49,7 +49,7 @@ DocuTouch is especially useful in repair loops. A failed operation should leave 
 | --- | --- | --- |
 | `set_workspace` | Default workspace for relative paths | Stores one canonical base path for the current MCP service instance. |
 | `list_directory` | Directory tree | Renders an ASCII tree with optional hidden files, gitignored files, timestamps, and ripgrep/ignore file-type filters. |
-| `read_file` | One file or one `pueue-log:<id>` handle | Supports `start:stop` line ranges, negative tail-relative bounds, line numbers, sampled inspection, and horizontal clipping. |
+| `read_file` | One file or one `pueue-log:<id>` handle | Supports `start:stop` line ranges, negative tail-relative bounds, line numbers, and sampled inspection. |
 | `search_text` | Ripgrep-compatible text search | Accepts one path, many paths, or `pueue-log:<id>`; infers grouped, context, counts, files, raw text, or raw JSON output from `rg_args`. |
 | `structural_search` | AST search session | Runs `ast-grep` pattern/rule queries and registers result groups for `expand`, `around`, and `explain_ast`. |
 | `wait_pueue` | Pueue wait snapshot | Waits for explicit task ids or the current unfinished snapshot and returns reusable `pueue-log:<id>` handles. |

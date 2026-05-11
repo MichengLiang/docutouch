@@ -200,7 +200,6 @@ fn read_file_clips_end_of_range_to_eof() {
         ReadFileOptions {
             line_range: Some((1, 5).into()),
             show_line_numbers: false,
-            max_chars: None,
         },
     )
     .expect("read file");
@@ -219,7 +218,6 @@ fn read_file_can_render_one_indexed_line_numbers() {
         ReadFileOptions {
             line_range: Some((2, 2).into()),
             show_line_numbers: true,
-            max_chars: None,
         },
     )
     .expect("read file");
@@ -243,7 +241,6 @@ fn read_file_aligns_line_numbers_to_widest_visible_line() {
         ReadFileOptions {
             line_range: Some((9, 12).into()),
             show_line_numbers: true,
-            max_chars: None,
         },
     )
     .expect("read file");
@@ -268,7 +265,6 @@ fn read_file_sampled_view_renders_vertical_omission_markers() {
         ReadFileOptions {
             line_range: Some((1, 8).into()),
             show_line_numbers: false,
-            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 5,
@@ -286,14 +282,13 @@ fn read_file_sampled_view_renders_vertical_omission_markers() {
 fn read_file_sampled_view_preserves_line_number_intent() {
     let temp = tempfile::tempdir().expect("tempdir");
     let file_path = temp.path().join("notes.md");
-    std::fs::write(&file_path, "abcdefghij\nshort\nklmnopqrstuv\n").expect("write file");
+    std::fs::write(&file_path, "alpha\nbeta\ngamma\n").expect("write file");
 
     let result = read_file_with_sampled_view(
         &file_path,
         ReadFileOptions {
             line_range: Some((1, 3).into()),
             show_line_numbers: false,
-            max_chars: Some(5),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
@@ -302,10 +297,7 @@ fn read_file_sampled_view_preserves_line_number_intent() {
     )
     .expect("read file");
 
-    assert_eq!(
-        result.content,
-        "abcde...[5 chars omitted]\n...\nklmno...[7 chars omitted]\n"
-    );
+    assert_eq!(result.content, "alpha\n...\ngamma\n");
 }
 
 #[test]
@@ -322,7 +314,6 @@ fn read_file_sampled_view_can_render_line_numbers_when_requested() {
         ReadFileOptions {
             line_range: Some((9, 12).into()),
             show_line_numbers: true,
-            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 3,
@@ -348,7 +339,6 @@ fn read_file_sampled_view_rejects_non_sampled_shapes() {
         ReadFileOptions {
             line_range: Some((1, 2).into()),
             show_line_numbers: false,
-            max_chars: Some(80),
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
@@ -364,30 +354,7 @@ fn read_file_sampled_view_rejects_non_sampled_shapes() {
 }
 
 #[test]
-fn read_file_sampled_view_rejects_zero_max_chars() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let file_path = temp.path().join("notes.md");
-    std::fs::write(&file_path, "alpha\nbeta\n").expect("write file");
-
-    let err = read_file_with_sampled_view(
-        &file_path,
-        ReadFileOptions {
-            line_range: Some((1, 2).into()),
-            show_line_numbers: false,
-            max_chars: Some(0),
-        },
-        Some(ReadFileSampledViewOptions {
-            sample_step: 3,
-            sample_lines: 1,
-        }),
-    )
-    .expect_err("zero max_chars should fail");
-
-    assert_eq!(err.to_string(), "read_file requires max_chars >= 1");
-}
-
-#[test]
-fn read_file_sampled_view_does_not_truncate_when_max_chars_is_omitted() {
+fn read_file_sampled_view_preserves_full_visible_lines() {
     let temp = tempfile::tempdir().expect("tempdir");
     let file_path = temp.path().join("notes.md");
     std::fs::write(&file_path, "abcdefghij\nshort\nklmnopqrstuv\n").expect("write file");
@@ -397,7 +364,6 @@ fn read_file_sampled_view_does_not_truncate_when_max_chars_is_omitted() {
         ReadFileOptions {
             line_range: Some((1, 3).into()),
             show_line_numbers: false,
-            max_chars: None,
         },
         Some(ReadFileSampledViewOptions {
             sample_step: 2,
@@ -434,31 +400,6 @@ fn normalize_sampled_view_options_requires_sampling_parameters() {
     let sampled = normalize_sampled_view_options(None, None).expect("normalize should succeed");
 
     assert!(sampled.is_none());
-}
-
-#[test]
-fn read_file_max_chars_without_sampling_preserves_exact_line_range() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let file_path = temp.path().join("notes.md");
-    let content = (1..=6)
-        .map(|line| format!("line {line} has more text here\n"))
-        .collect::<String>();
-    std::fs::write(&file_path, content).expect("write file");
-
-    let result = read_file(
-        &file_path,
-        ReadFileOptions {
-            line_range: Some((2, 4).into()),
-            show_line_numbers: true,
-            max_chars: Some(12),
-        },
-    )
-    .expect("read file");
-
-    assert_eq!(
-        result.content,
-        "2 | line 2 has m...[13 chars omitted]\n3 | line 3 has m...[13 chars omitted]\n4 | line 4 has m...[13 chars omitted]\n"
-    );
 }
 
 #[test]
@@ -505,7 +446,6 @@ fn read_file_slice_like_range_can_read_from_tail_without_total_line_probe() {
                 stop: None,
             }),
             show_line_numbers: true,
-            max_chars: None,
         },
     )
     .expect("read file");
@@ -532,7 +472,6 @@ fn read_file_slice_like_range_can_exclude_the_last_line() {
                 stop: Some(-1),
             }),
             show_line_numbers: false,
-            max_chars: None,
         },
     )
     .expect("read file");
@@ -556,7 +495,6 @@ fn read_file_slice_like_range_clamps_tail_overshoot_to_file_bounds() {
                 stop: None,
             }),
             show_line_numbers: false,
-            max_chars: None,
         },
     )
     .expect("read file");

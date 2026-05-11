@@ -28,7 +28,7 @@
   Rust CLI 适配器的详细设计规格。重点关注 shared semantics 抽取、CWD 作为隐式 workspace anchor、MCP/CLI parity，以及如何避免复制出第二套产品语义。
 
 - `read_file_sampled_view_spec.md`
-  `read_file` 采样检查视图的详细设计规格。重点关注 confidence-oriented inspection、`sample_step / sample_lines / max_chars`、以及纵向与横向省略的显式语义。
+  `read_file` 采样检查视图的详细设计规格。重点关注 confidence-oriented inspection、`sample_step / sample_lines`、以及纵向省略的显式语义。
 
 - `apply_splice_spec.md`
   `apply_splice` 的正式产品/设计契约。重点关注独立工具身份、面向现有片段的结构操作边界、由八个 transfer 动作加一个 `Delete Span` 原语构成的完整动作基、基于绝对行号的选择语义，以及与 `apply_patch` 的能力边界。

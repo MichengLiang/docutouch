@@ -125,7 +125,6 @@ impl From<(usize, usize)> for ReadFileLineRange {
 pub struct ReadFileOptions {
     pub line_range: Option<ReadFileLineRange>,
     pub show_line_numbers: bool,
-    pub max_chars: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -285,7 +284,6 @@ pub fn read_file_with_sampled_view(
     if let Some(sampled_view) = sampled_view.as_ref() {
         validate_sampled_view_options(sampled_view).map_err(std::io::Error::other)?;
     }
-    validate_max_chars(options.max_chars).map_err(std::io::Error::other)?;
     let rendered = render_read_file_content(&sliced, &options, sampled_view.as_ref());
 
     Ok(ReadFileResult {
@@ -821,13 +819,6 @@ fn validate_sampled_view_options(options: &ReadFileSampledViewOptions) -> Result
     Ok(())
 }
 
-fn validate_max_chars(max_chars: Option<usize>) -> Result<(), String> {
-    if max_chars == Some(0) {
-        return Err("read_file requires max_chars >= 1".to_string());
-    }
-    Ok(())
-}
-
 fn render_read_file_content(
     sliced: &SlicedContent,
     options: &ReadFileOptions,
@@ -838,24 +829,17 @@ fn render_read_file_content(
             &sliced.content,
             sliced.start_line,
             options.show_line_numbers,
-            options.max_chars,
             sampled_view,
         ),
         None => render_exact_view(
             &sliced.content,
             sliced.start_line,
             options.show_line_numbers,
-            options.max_chars,
         ),
     }
 }
 
-fn render_exact_view(
-    content: &str,
-    start_line: usize,
-    show_line_numbers: bool,
-    max_chars: Option<usize>,
-) -> String {
+fn render_exact_view(content: &str, start_line: usize, show_line_numbers: bool) -> String {
     if content.is_empty() {
         return String::new();
     }
@@ -871,16 +855,15 @@ fn render_exact_view(
         .into_iter()
         .enumerate()
         .map(|(offset, line)| {
-            let rendered_line = truncate_line(line, max_chars);
             if show_line_numbers {
                 format!(
                     "{:>width$} | {}",
                     start_line + offset,
-                    rendered_line,
+                    line,
                     width = line_number_width
                 )
             } else {
-                rendered_line
+                line.to_string()
             }
         })
         .collect()
@@ -890,7 +873,6 @@ fn render_sampled_view(
     content: &str,
     start_line: usize,
     show_line_numbers: bool,
-    max_chars: Option<usize>,
     options: &ReadFileSampledViewOptions,
 ) -> String {
     if content.is_empty() {
@@ -909,16 +891,15 @@ fn render_sampled_view(
     while block_start < lines.len() {
         let block_end = (block_start + options.sample_lines).min(lines.len());
         for (index, line) in lines.iter().enumerate().take(block_end).skip(block_start) {
-            let rendered_line = truncate_line(line, max_chars);
             if show_line_numbers {
                 rendered.push_str(&format!(
                     "{:>width$} | {}",
                     start_line + index,
-                    rendered_line,
+                    line,
                     width = line_number_width
                 ));
             } else {
-                rendered.push_str(&rendered_line);
+                rendered.push_str(line);
             }
         }
 
@@ -936,32 +917,6 @@ fn render_sampled_view(
 
     rendered
 }
-
-fn truncate_line(line: &str, max_chars: Option<usize>) -> String {
-    let Some(max_chars) = max_chars else {
-        return line.to_string();
-    };
-    let (body, newline) = split_line_ending(line);
-    let body_len = body.chars().count();
-    if body_len <= max_chars {
-        return line.to_string();
-    }
-
-    let visible = body.chars().take(max_chars).collect::<String>();
-    let omitted = body_len - max_chars;
-    format!("{visible}...[{omitted} chars omitted]{newline}")
-}
-
-fn split_line_ending(line: &str) -> (&str, &str) {
-    if let Some(stripped) = line.strip_suffix("\r\n") {
-        (stripped, "\r\n")
-    } else if let Some(stripped) = line.strip_suffix('\n') {
-        (stripped, "\n")
-    } else {
-        (line, "")
-    }
-}
-
 fn format_file_metadata(file_path: &Path, options: &DirectoryListOptions) -> String {
     let metadata = match file_path.metadata() {
         Ok(metadata) => metadata,

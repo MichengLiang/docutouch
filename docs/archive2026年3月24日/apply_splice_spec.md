@@ -221,23 +221,18 @@ This is not a sparse sample.
 It is a compact way to denote a contiguous range.
 Bare `...` from sampled inspection output is not canonical in `apply_splice`.
 
-## 9. Why horizontal truncation must be forbidden here
-
-The `read_file` sampled view can tolerate horizontal truncation because it is a
-confidence-oriented inspection tool.
-
-`apply_splice` cannot.
+## 9. Why truncated selections must be forbidden here
 
 Reasoning:
 
 - a splice selection must name exact existing text
-- horizontal truncation would weaken the content anchor
+- truncated text would weaken the content anchor
 - the tool must preserve deterministic source/target matching behavior
 
 Therefore:
 
 - line-numbered excerpts with vertical omission are allowed
-- `...[N chars omitted]` is not allowed inside splice selections
+- truncated line markers are not allowed inside splice selections
 
 ## 10. Operational semantics
 

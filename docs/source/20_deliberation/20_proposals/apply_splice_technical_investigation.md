@@ -51,7 +51,6 @@
 - patch grammar and hunk parser
 - diff/context replacement logic
 - patch-specific sidecar schema
-- sampled-read horizontal truncation semantics
 
 ## Unresolved Design Set
 

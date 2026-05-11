@@ -13,8 +13,8 @@ Tasks:
 
 - [x] Confirm that sampled view is a confidence-oriented inspection mode
 - [x] Reject DSL-based control in v1
-- [x] Confirm the explicit parameter model: `sample_step`, `sample_lines`, `max_chars`
-- [x] Confirm vertical `...` and inline `...[N chars omitted]` as the two omission forms
+- [x] Confirm the explicit parameter model: `sample_step`, `sample_lines`
+- [x] Confirm vertical `...` as the omission form
 - [x] Confirm that sampled mode does not prepend an out-of-band metadata header
 
 ## Phase 1. Argument Contract Design
@@ -40,7 +40,6 @@ Tasks:
 
 - [x] Implement sampled block selection over a bounded contiguous range
 - [x] Render standalone vertical omission markers
-- [x] Render inline horizontal truncation markers with omitted char counts
 - [x] Ensure sampled blocks remain ordered and non-overlapping
 
 Deliverable:
@@ -69,7 +68,6 @@ Tasks:
 
 - [x] Test very short ranges
 - [x] Test ranges that are not divisible by `sample_step`
-- [x] Test long lines with `max_chars`
 - [x] Test interactions between sampled mode and ordinary exact range behavior
 
 Deliverable:

@@ -14,10 +14,10 @@
 | Gate Item | Current Standing | Note |
 | --- | --- | --- |
 | design lock | closed | sampled view 的认知定位与 omission model 已锁定 |
-| argument contract | closed | `sample_step` / `sample_lines` / `max_chars` contract 已定型 |
+| argument contract | closed | `sample_step` / `sample_lines` contract 已定型 |
 | core rendering logic | closed | sampled block selection 与 omission rendering 已落地 |
 | prompt-facing guidance | closed | sampled mode 的使用纪律已写入现行 contract |
-| validation and edge cases | closed | short-range / long-line / interaction edge cases 已覆盖 |
+| validation and edge cases | closed | short-range / interaction edge cases 已覆盖 |
 | review and acceptance | closed | sampled view 已进入 ship-ready 状态 |
 
 ## Closed Outcomes

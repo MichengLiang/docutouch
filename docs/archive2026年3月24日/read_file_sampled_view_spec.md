@@ -68,7 +68,6 @@ Recommended parameters:
 
 - `sample_step`
 - `sample_lines`
-- `max_chars`
 
 ### Decision D3: the mode is local and dense, not sparse and global
 
@@ -94,17 +93,9 @@ Reasoning:
 - when the caller needs stronger positional certainty, it can explicitly enable
   line numbers
 
-### Decision D5: vertical and horizontal omission must remain type-distinct
+### Decision D5: vertical omission remains explicit
 
-The system must never let the caller confuse:
-
-- omitted whole lines
-- omitted trailing characters on a displayed line
-
-Therefore:
-
-- vertical omission uses a standalone marker line
-- horizontal truncation uses an inline suffix marker with an omitted-count
+The system must render omitted whole lines with a standalone marker line.
 
 ## 5. Proposed external contract
 
@@ -117,8 +108,7 @@ read_file(
   line_range?: range,
   show_line_numbers?: bool,
   sample_step?: positive integer,
-  sample_lines?: positive integer,
-  max_chars?: positive integer
+  sample_lines?: positive integer
 )
 ```
 
@@ -134,10 +124,6 @@ read_file(
 
 - `sample_lines`
   - number of consecutive lines shown in each sampled block
-
-- `max_chars`
-  - maximum visible characters per rendered line in sampled mode
-  - trailing characters beyond that limit are explicitly marked as omitted
 
 ### 5.2 Validation rule
 
@@ -161,7 +147,6 @@ Therefore sampled mode should not prepend a separate metadata header such as:
 - `range: ...`
 - `sample_step: ...`
 - `sample_lines: ...`
-- `max_chars: ...`
 
 The caller already knows the requested parameters.
 The returned body should consist only of the transformed text view itself.
@@ -187,18 +172,6 @@ Example:
 This is strongest when line numbers are enabled, but still acceptable without
 them because sampled mode is a heuristic inspection surface, not a claim of
 continuous exact reading.
-
-### 6.3 Horizontal omission
-
-Horizontal truncation must remain explicit and inline.
-
-Recommended shape:
-
-```text
-124 | const VERY_LONG = "abcdef..." ... [37 chars omitted]
-```
-
-This must stay distinct from the standalone vertical omission marker.
 
 ## 7. Recommended reading model
 
@@ -226,16 +199,13 @@ cognitive intent, not only raw compression.
 
 - `sample_step = 4`
 - `sample_lines = 2`
-- `max_chars = 80`
 
-This gives a dense local inspection surface with moderate vertical thinning and
-controlled horizontal width.
+This gives a dense local inspection surface with moderate vertical thinning.
 
 ### Recommended set B: cheaper local check
 
 - `sample_step = 5`
 - `sample_lines = 2`
-- `max_chars = 80`
 
 This is the preferred recommendation for ordinary post-write confidence checks.
 
@@ -243,37 +213,9 @@ This is the preferred recommendation for ordinary post-write confidence checks.
 
 - `sample_step = 3`
 - `sample_lines = 2`
-- `max_chars = 100`
 
 This keeps more local continuity for formatting-sensitive or structure-sensitive
 content.
-
-## 9. Why `max_chars` is preferred over alternatives
-
-### Rejected option: percentage-based width
-
-Reasoning:
-
-- percentages are less predictable across lines of different lengths
-- they do not map cleanly to perceived reading cost
-- they complicate prompt guidance
-
-### Rejected option: token-based width
-
-Reasoning:
-
-- tokenization is model-dependent
-- it is too expensive and too indirect for a generic file-reading tool
-- it weakens model-agnostic usability
-
-### Preferred option: `max_chars`
-
-Reasoning:
-
-- direct
-- predictable
-- model-agnostic
-- easy to explain in prompt guidance
 
 ## 10. Prompt-facing guidance
 
@@ -285,7 +227,6 @@ Recommended prompt-facing phrasing:
 - sampled view is for dense local confidence checks, not full reading
 - use small `sample_step` values such as `3-5` on a bounded range
 - keep `sample_lines=2` for a good balance between continuity and compactness
-- use `max_chars` to cap line width while keeping truncation explicit
 - enable line numbers when the task is precision-sensitive; leave them off when
   the goal is only low-cost structural or relevance checking
 
@@ -293,7 +234,7 @@ Recommended prompt-facing phrasing:
 
 The sampled view should count as successful only if:
 
-- the caller can distinguish vertical omission from horizontal truncation at a glance
+- the caller can distinguish vertical omission at a glance
 - the mode stays obviously different from exact contiguous reading
 - the recommended parameter combinations feel stable and unsurprising
 - sampled mode improves confidence-check workflows without becoming a second

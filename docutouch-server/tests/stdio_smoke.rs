@@ -321,6 +321,32 @@ fn input_schema_property_value(tool: &rmcp::model::Tool, property: &str) -> Valu
         .unwrap_or(Value::Null)
 }
 
+fn input_schema_property_names(tool: &rmcp::model::Tool) -> Vec<String> {
+    let mut names = serde_json::to_value(tool.input_schema.as_ref())
+        .expect("input schema json")
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| properties.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+fn input_schema_required_properties(tool: &rmcp::model::Tool) -> Vec<String> {
+    serde_json::to_value(tool.input_schema.as_ref())
+        .expect("input schema json")
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn tool_description(tool: &rmcp::model::Tool) -> String {
     tool.description
         .as_ref()
@@ -619,6 +645,18 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
             .iter()
             .find(|tool| tool.name.as_ref() == "structural_search")
             .expect("structural_search tool");
+        let apply_patch = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "apply_patch")
+            .expect("apply_patch tool");
+        let apply_rewrite = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "apply_rewrite")
+            .expect("apply_rewrite tool");
+        let apply_splice = tools
+            .iter()
+            .find(|tool| tool.name.as_ref() == "apply_splice")
+            .expect("apply_splice tool");
         let wait_pueue = tools
             .iter()
             .find(|tool| tool.name.as_ref() == "wait_pueue")
@@ -659,6 +697,10 @@ async fn server_tool_descriptions_surface_pueue_log_contract() -> anyhow::Result
                 .and_then(Value::as_str),
             Some("object")
         );
+        for tool in [apply_patch, apply_rewrite, apply_splice] {
+            assert_eq!(input_schema_property_names(tool), vec!["freeform"]);
+            assert_eq!(input_schema_required_properties(tool), vec!["freeform"]);
+        }
 
         Ok(())
     })
@@ -985,7 +1027,7 @@ async fn server_round_trips_workspace_splice_and_read() -> anyhow::Result<()> {
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_splice".into(),
-                arguments: Some(json_object(json!({ "splice": splice_text() }))),
+                arguments: Some(json_object(json!({ "freeform": splice_text() }))),
                 task: None,
             })
             .await?;
@@ -1020,7 +1062,7 @@ async fn server_round_trips_workspace_rewrite_and_read() -> anyhow::Result<()> {
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_rewrite".into(),
-                arguments: Some(json_object(json!({ "rewrite": rewrite_text() }))),
+                arguments: Some(json_object(json!({ "freeform": rewrite_text() }))),
                 task: None,
             })
             .await?;
@@ -1058,7 +1100,7 @@ async fn server_rewrite_warns_and_uses_final_path_accounting_for_move_overwrite(
                 meta: None,
                 name: "apply_rewrite".into(),
                 arguments: Some(json_object(
-                    json!({ "rewrite": rewrite_move_overwrite_text() }),
+                    json!({ "freeform": rewrite_move_overwrite_text() }),
                 )),
                 task: None,
             })
@@ -1099,7 +1141,7 @@ async fn server_rewrite_delete_missing_is_reported_as_hard_failure() -> anyhow::
                 meta: None,
                 name: "apply_rewrite".into(),
                 arguments: Some(json_object(
-                    json!({ "rewrite": rewrite_delete_missing_text() }),
+                    json!({ "freeform": rewrite_delete_missing_text() }),
                 )),
                 task: None,
             })
@@ -1687,7 +1729,7 @@ async fn server_round_trips_workspace_patch_and_read() -> anyhow::Result<()> {
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                arguments: Some(json_object(json!({ "freeform": patch_text() }))),
                 task: None,
             })
             .await?;
@@ -1746,7 +1788,7 @@ async fn server_warns_when_add_replaces_existing_file() -> anyhow::Result<()> {
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": "*** Begin Patch\n*** Add File: notes.md\n+new\n*** End Patch\n"
+                    "freeform": "*** Begin Patch\n*** Add File: notes.md\n+new\n*** End Patch\n"
                 }))),
                 task: None,
             })
@@ -1781,7 +1823,7 @@ async fn server_warns_when_move_replaces_existing_destination() -> anyhow::Resul
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-from\n+new\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-from\n+new\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -1814,7 +1856,7 @@ async fn server_allows_empty_add_file_and_creates_empty_file() -> anyhow::Result
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": patch }))),
+                arguments: Some(json_object(json!({ "freeform": patch }))),
                 task: None,
             })
             .await?;
@@ -1849,7 +1891,7 @@ async fn server_preserves_crlf_bytes_during_update() -> anyhow::Result<()> {
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": patch }))),
+                arguments: Some(json_object(json!({ "freeform": patch }))),
                 task: None,
             })
             .await?;
@@ -1883,7 +1925,7 @@ async fn server_preserves_missing_final_newline_during_update() -> anyhow::Resul
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": patch }))),
+                arguments: Some(json_object(json!({ "freeform": patch }))),
                 task: None,
             })
             .await?;
@@ -2144,7 +2186,7 @@ async fn server_requires_workspace_for_relative_paths_without_default() -> anyho
                 .call_tool(CallToolRequestParams {
                     meta: None,
                     name: "apply_patch".into(),
-                    arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                    arguments: Some(json_object(json!({ "freeform": patch_text() }))),
                     task: None,
                 })
                 .await
@@ -2207,7 +2249,7 @@ async fn server_uses_default_workspace_from_env_without_set_workspace() -> anyho
                 .call_tool(CallToolRequestParams {
                     meta: None,
                     name: "apply_patch".into(),
-                    arguments: Some(json_object(json!({ "patch": patch_text() }))),
+                    arguments: Some(json_object(json!({ "freeform": patch_text() }))),
                     task: None,
                 })
                 .await?;
@@ -2313,7 +2355,7 @@ async fn server_apply_patch_accepts_absolute_paths_without_workspace() -> anyhow
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": format!(
+                    "freeform": format!(
                         "*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch\n",
                         target.display()
                     )
@@ -2357,7 +2399,7 @@ async fn server_apply_splice_accepts_absolute_paths_without_workspace() -> anyho
                 meta: None,
                 name: "apply_splice".into(),
                 arguments: Some(json_object(json!({
-                    "splice": format!(
+                    "freeform": format!(
                         "*** Begin Splice\n*** Copy From File: {}\n@@\n1 | alpha\n*** Append To File: {}\n*** End Splice\n",
                         source.display(),
                         dest.display()
@@ -2401,7 +2443,7 @@ async fn server_apply_rewrite_accepts_absolute_paths_without_workspace() -> anyh
                 meta: None,
                 name: "apply_rewrite".into(),
                 arguments: Some(json_object(json!({
-                    "rewrite": format!(
+                    "freeform": format!(
                         "*** Begin Rewrite\n*** Update File: {}\n@@\n1 | old\n*** With\nnew\n*** End With\n*** End Rewrite\n",
                         target.display()
                     )
@@ -2594,7 +2636,7 @@ async fn server_reports_outer_format_failure() -> anyhow::Result<()> {
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(
-                    json!({ "patch": "*** Patch File: changes.patch\n" }),
+                    json!({ "freeform": "*** Patch File: changes.patch\n" }),
                 )),
                 task: None,
             })
@@ -2627,7 +2669,7 @@ async fn server_reports_outer_hunk_failure_with_source_excerpt() -> anyhow::Resu
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Add File: broken.txt\nbroken line\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Add File: broken.txt\nbroken line\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -2663,7 +2705,7 @@ async fn server_reports_empty_patch_as_structured_failure() -> anyhow::Result<()
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": "" }))),
+                arguments: Some(json_object(json!({ "freeform": "" }))),
                 task: None,
             })
             .await
@@ -2703,7 +2745,7 @@ async fn server_reports_patch_failure_with_persisted_patch_source() -> anyhow::R
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: app.py\n@@\n-missing = 1\n+value = 2\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -2748,7 +2790,7 @@ async fn server_default_header_only_treats_dense_numbered_old_side_as_literal_te
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
+                    "freeform": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
                 }))),
                 task: None,
             })
@@ -2782,7 +2824,7 @@ async fn server_env_full_enables_dense_numbered_old_side_evidence() -> anyhow::R
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
+                    "freeform": "*** Begin Patch\n*** Update File: app.py\n@@\n-1 | value = 1\n+value = 2\n*** End Patch\n"
                 }))),
                 task: None,
             })
@@ -2816,7 +2858,7 @@ async fn server_accepts_duplicate_first_old_side_after_numbered_header() -> anyh
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": "*** Begin Patch\n*** Update File: app.py\n@@ 4 | def handler():\n-def handler():\n-    value = 1\n+def handler():\n+    value = 2\n*** End Patch\n"
+                    "freeform": "*** Begin Patch\n*** Update File: app.py\n@@ 4 | def handler():\n-def handler():\n-    value = 1\n+def handler():\n+    value = 2\n*** End Patch\n"
                 }))),
                 task: None,
             })
@@ -2851,7 +2893,7 @@ async fn server_reports_first_removed_line_when_context_precedes_mismatch() -> a
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: app.py\n@@\n context\n other\n-missing = 1\n+value = 2\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: app.py\n@@\n context\n other\n-missing = 1\n+value = 2\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -2889,7 +2931,7 @@ async fn server_reports_target_anchor_for_context_guided_mismatch() -> anyhow::R
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: app.py\n@@ 1 | def handler():\n-    missing = 1\n+    value = 2\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: app.py\n@@ 1 | def handler():\n-    missing = 1\n+    value = 2\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -2941,7 +2983,7 @@ async fn server_reports_commit_stage_source_span_for_write_failure() -> anyhow::
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: src/name.txt\n*** Move to: blocked/dir/name.txt\n@@\n-from\n+new\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: src/name.txt\n*** Move to: blocked/dir/name.txt\n@@\n-from\n+new\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -2986,7 +3028,7 @@ async fn server_reports_update_target_missing_as_compact_full_failure() -> anyho
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -3031,7 +3073,7 @@ async fn server_reports_delete_target_missing_as_compact_full_failure() -> anyho
                 meta: None,
                 name: "apply_patch".into(),
                 arguments: Some(json_object(json!({
-                    "patch": "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch\n"
+                    "freeform": "*** Begin Patch\n*** Delete File: missing.txt\n*** End Patch\n"
                 }))),
                 task: None,
             })
@@ -3076,7 +3118,7 @@ async fn server_reports_partial_success_with_applied_files() -> anyhow::Result<(
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
+                "freeform": "*** Begin Patch\n*** Add File: created.txt\n+hello\n*** Update File: missing.txt\n@@\n-old\n+new\n*** End Patch\n"
             }))),
             task: None,
         })
@@ -3139,7 +3181,7 @@ async fn server_enumerates_large_committed_file_lists_without_omission_prose() -
             .call_tool(CallToolRequestParams {
                 meta: None,
                 name: "apply_patch".into(),
-                arguments: Some(json_object(json!({ "patch": patch }))),
+                arguments: Some(json_object(json!({ "freeform": patch }))),
                 task: None,
             })
             .await
@@ -3182,7 +3224,7 @@ async fn server_rolls_back_failed_move_group() -> anyhow::Result<()> {
             meta: None,
             name: "apply_patch".into(),
             arguments: Some(json_object(json!({
-                "patch": format!(
+                "freeform": format!(
                     "*** Begin Patch\n*** Update File: {}\n*** Move to: {}\n@@\n-from\n+new\n*** End Patch\n",
                     temp.path().join("src").join("name.txt").display(),
                     temp.path().join("blocked").join("dir").join("name.txt").display()

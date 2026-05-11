@@ -123,7 +123,7 @@ pub struct ApplyPatchArgs {
     #[schemars(
         description = "freeform patch 文本。补丁接受 Add / Delete / Update / Move 语义，并按文件组级原子边界执行。"
     )]
-    pub patch: String,
+    pub freeform: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -131,7 +131,7 @@ pub struct ApplySpliceArgs {
     #[schemars(
         description = "freeform splice 文本。程序接受 Begin/End Splice envelope、Copy/Move/Delete Span action 以及 Append/Insert/Replace target clauses，并按当前 splice runtime 执行。"
     )]
-    pub splice: String,
+    pub freeform: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -139,7 +139,7 @@ pub struct ApplyRewriteArgs {
     #[schemars(
         description = "freeform rewrite 文本。程序接受 Begin/End Rewrite envelope、Add/Delete/Update file operation、selection-locked rewrite action 与 WithBlock，并按当前 rewrite runtime 执行。"
     )]
-    pub rewrite: String,
+    pub freeform: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -398,15 +398,15 @@ impl ToolService {
             }
             "apply_patch" => {
                 let args = parse_json_args::<ApplyPatchArgs>(arguments)?;
-                self.apply_patch_impl(args.patch).await
+                self.apply_patch_impl(args.freeform).await
             }
             "apply_splice" => {
                 let args = parse_json_args::<ApplySpliceArgs>(arguments)?;
-                self.apply_splice_impl(args.splice).await
+                self.apply_splice_impl(args.freeform).await
             }
             "apply_rewrite" => {
                 let args = parse_json_args::<ApplyRewriteArgs>(arguments)?;
-                self.apply_rewrite_impl(args.rewrite).await
+                self.apply_rewrite_impl(args.freeform).await
             }
             other => Err(ServiceError::tool_not_found(format!(
                 "unknown tool: {other}"

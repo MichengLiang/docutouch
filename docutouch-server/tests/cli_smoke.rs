@@ -1206,7 +1206,7 @@ async fn cli_patch_success_matches_mcp_output_and_reads_stdin() -> anyhow::Resul
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_success_text() }),
+        json!({ "freeform": patch_success_text() }),
     )
     .await?;
 
@@ -1281,7 +1281,7 @@ async fn cli_splice_success_matches_mcp_output_and_reads_stdin() -> anyhow::Resu
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_splice",
-        json!({ "splice": splice_success_text() }),
+        json!({ "freeform": splice_success_text() }),
     )
     .await?;
 
@@ -1310,7 +1310,7 @@ async fn cli_splice_failure_matches_mcp_output() -> anyhow::Result<()> {
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_splice",
-        json!({ "splice": splice_failure_text() }),
+        json!({ "freeform": splice_failure_text() }),
     )
     .await?;
 
@@ -1340,7 +1340,7 @@ async fn cli_splice_partial_failure_matches_mcp_output() -> anyhow::Result<()> {
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_splice",
-        json!({ "splice": splice_partial_failure_text() }),
+        json!({ "freeform": splice_partial_failure_text() }),
     )
     .await?;
 
@@ -1378,7 +1378,7 @@ async fn cli_rewrite_success_matches_mcp_output_and_reads_stdin() -> anyhow::Res
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_rewrite",
-        json!({ "rewrite": rewrite_success_text() }),
+        json!({ "freeform": rewrite_success_text() }),
     )
     .await?;
 
@@ -1407,7 +1407,7 @@ async fn cli_rewrite_failure_matches_mcp_output() -> anyhow::Result<()> {
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_rewrite",
-        json!({ "rewrite": rewrite_failure_text() }),
+        json!({ "freeform": rewrite_failure_text() }),
     )
     .await?;
 
@@ -1434,7 +1434,7 @@ async fn cli_rewrite_move_overwrite_warning_matches_mcp_output() -> anyhow::Resu
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_rewrite",
-        json!({ "rewrite": rewrite_move_overwrite_text() }),
+        json!({ "freeform": rewrite_move_overwrite_text() }),
     )
     .await?;
 
@@ -1467,7 +1467,7 @@ async fn cli_rewrite_delete_missing_matches_mcp_output() -> anyhow::Result<()> {
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_rewrite",
-        json!({ "rewrite": rewrite_delete_missing_text() }),
+        json!({ "freeform": rewrite_delete_missing_text() }),
     )
     .await?;
 
@@ -1495,7 +1495,7 @@ async fn cli_patch_partial_failure_matches_mcp_inline_diagnostics() -> anyhow::R
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_partial_failure_text() }),
+        json!({ "freeform": patch_partial_failure_text() }),
     )
     .await?;
 
@@ -1530,7 +1530,7 @@ async fn cli_patch_single_full_failure_matches_mcp_inline_diagnostics() -> anyho
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_full_failure_text() }),
+        json!({ "freeform": patch_full_failure_text() }),
     )
     .await?;
 
@@ -1561,7 +1561,8 @@ async fn cli_patch_empty_input_matches_mcp_inline_diagnostics() -> anyhow::Resul
     let cli_temp = tempfile::tempdir()?;
 
     let server_error =
-        call_server_tool_error(server_temp.path(), "apply_patch", json!({ "patch": "" })).await?;
+        call_server_tool_error(server_temp.path(), "apply_patch", json!({ "freeform": "" }))
+            .await?;
 
     let cli_output = run_cli(cli_temp.path(), &["patch"], Some(""))?;
     assert!(!cli_output.status.success());
@@ -1587,7 +1588,7 @@ async fn cli_patch_empty_add_file_matches_mcp_output() -> anyhow::Result<()> {
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_empty_add_file_text() }),
+        json!({ "freeform": patch_empty_add_file_text() }),
     )
     .await?;
 
@@ -1618,7 +1619,7 @@ async fn cli_patch_preserves_crlf_bytes_matches_mcp_output() -> anyhow::Result<(
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_preserve_crlf_text() }),
+        json!({ "freeform": patch_preserve_crlf_text() }),
     )
     .await?;
 
@@ -1646,7 +1647,7 @@ async fn cli_patch_preserves_missing_final_newline_matches_mcp_output() -> anyho
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_preserve_no_final_newline_text() }),
+        json!({ "freeform": patch_preserve_no_final_newline_text() }),
     )
     .await?;
 
@@ -1677,7 +1678,7 @@ async fn cli_patch_no_op_positional_patch_file_matches_mcp_output() -> anyhow::R
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_no_op_text() }),
+        json!({ "freeform": patch_no_op_text() }),
     )
     .await?;
 
@@ -1704,7 +1705,7 @@ async fn cli_patch_long_form_patch_file_supports_space_target_paths() -> anyhow:
     let server_output = call_server_tool(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_space_target_text() }),
+        json!({ "freeform": patch_space_target_text() }),
     )
     .await?;
 
@@ -1736,7 +1737,7 @@ async fn cli_patch_move_write_failure_matches_mcp_inline_diagnostics() -> anyhow
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch_move_write_failure_text() }),
+        json!({ "freeform": patch_move_write_failure_text() }),
     )
     .await?;
 
@@ -1901,7 +1902,7 @@ async fn cli_patch_large_partial_failure_enumerates_all_committed_paths() -> any
     let server_error = call_server_tool_error(
         server_temp.path(),
         "apply_patch",
-        json!({ "patch": patch.as_str() }),
+        json!({ "freeform": patch.as_str() }),
     )
     .await?;
 

@@ -281,47 +281,47 @@ async def showcase_apply_patch(client: Client):
     cases = [
         (
             "Success / Full Success",
-            {"patch": build_success_patch()},
+            {"freeform": build_success_patch()},
             False,
         ),
         (
             "Failure / Empty Patch",
-            {"patch": ""},
+            {"freeform": ""},
             True,
         ),
         (
             "Failure / Outer Invalid Add Line",
-            {"patch": build_invalid_add_patch()},
+            {"freeform": build_invalid_add_patch()},
             True,
         ),
         (
             "Failure / Update Target Missing",
-            {"patch": build_missing_target_patch()},
+            {"freeform": build_missing_target_patch()},
             True,
         ),
         (
             "Failure / Context Mismatch",
-            {"patch": build_context_mismatch_patch()},
+            {"freeform": build_context_mismatch_patch()},
             True,
         ),
         (
             "Failure / Target Anchor Mismatch",
-            {"patch": build_target_anchor_mismatch_patch()},
+            {"freeform": build_target_anchor_mismatch_patch()},
             True,
         ),
         (
             "Failure / Partial Success",
-            {"patch": build_partial_failure_patch()},
+            {"freeform": build_partial_failure_patch()},
             True,
         ),
         (
             "Failure / Large Partial Success",
-            {"patch": build_large_partial_failure_patch()},
+            {"freeform": build_large_partial_failure_patch()},
             True,
         ),
         (
             "Failure / Move Write Error",
-            {"patch": build_move_write_failure_patch()},
+            {"freeform": build_move_write_failure_patch()},
             True,
         ),
     ]
